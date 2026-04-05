@@ -6,72 +6,81 @@ This document describes how to write a HyperWhip configuration file (`hyperwhip.
 
 A HyperWhip experiment requires exactly two user-authored files:
 
-1. **`hyperwhip.yaml`** — declares the hyperparameter search space, SLURM resources, constraints, and how to invoke the training command.
+1. **`hyperwhip.yaml`** — declares the hyperparameter search space, SLURM resources, constraints, and static Hydra overrides.
 2. **`launch.sh`** — a bash script that receives a Hydra override string as its first argument (`$1`) and runs the training command inside whatever environment you need (container, conda, modules, etc.).
 
-HyperWhip is invoked as:
+Both files live in a **workspace directory**. All HyperWhip commands take the workspace directory as their argument:
 
 ```bash
+# Scaffold a new experiment:
+mush init my_experiment --partition gpu --gres gpu:1
+
 # Preview what will be submitted (no SLURM interaction):
-hyperwhip launch hyperwhip.yaml --dry-run
+mush launch my_experiment --dry-run
 
 # Submit the job array:
-hyperwhip launch hyperwhip.yaml
+mush launch my_experiment
 
 # Check status:
-hyperwhip monitor hyperwhip.yaml
+mush monitor my_experiment
+
+# Tail a specific trial's log:
+mush tail my_experiment 3
 
 # Cancel and clean up:
-hyperwhip clean hyperwhip.yaml --all
+mush clean my_experiment --all
 ```
 
 ---
 
 ## Configuration File Reference
 
-The configuration file is YAML. Every field is documented below with its type, whether it is required, and its default value.
+The configuration file is YAML. Every field is documented below with its type, whether it is required, and its default value. The config is validated with Pydantic at parse time — invalid configs produce clear error messages immediately.
 
 ### Top-level fields
 
-| Field       | Type   | Required | Default          | Description |
-|-------------|--------|----------|------------------|-------------|
-| `name`      | string | **yes**  | —                | Unique experiment name. Used in the SLURM job name (`hyperwhip_<name>`) and as the default workspace directory name. Must be a valid filename component (letters, numbers, underscores, hyphens). |
-| `workspace` | string | no       | `./<name>`       | Directory where HyperWhip stores its state (`.hyperwhip/` subdirectory with manifest, logs, generated sbatch script). Relative paths are resolved relative to the config file's directory. |
-| `launcher`  | string | **yes**  | —                | Path to the launcher bash script. Relative paths are resolved relative to the config file's directory. See [Launcher Script](#launcher-script) below. |
-| `search`    | object | no       | `{mode: "grid"}` | Search strategy configuration. See [search](#search). |
-| `slurm`     | object | no       | see below        | SLURM resource requests. See [slurm](#slurm). |
-| `hydra`     | object | no       | see below        | Hydra command and static overrides. See [hydra](#hydra). |
-| `parameters`| object | **yes**  | —                | Hyperparameter definitions. At least one parameter is required. See [parameters](#parameters). |
-| `constraints`| list  | no       | `[]`             | Constraints that filter or modify parameter combinations. See [constraints](#constraints). |
+| Field         | Type   | Required | Default | Description |
+|---------------|--------|----------|---------|-------------|
+| `name`        | string | **yes**  | —       | Unique experiment name. Used in the SLURM job name (`hyperwhip_<name>`). Must be a valid filename component. |
+| `grid`        | string or list | no | *omitted* | Controls which parameters are swept via Cartesian product. See [grid](#grid). |
+| `launcher`    | string | **yes**  | —       | Path to the launcher bash script. Relative paths are resolved relative to the config file's directory. See [Launcher Script](#launcher-script). |
+| `slurm`       | object | no       | see below | SLURM resource requests. See [slurm](#slurm). |
+| `hydra`       | object | no       | see below | Static Hydra overrides. See [hydra](#hydra). |
+| `parameters`  | object | **yes**  | —       | Hyperparameter definitions. At least one parameter is required. See [parameters](#parameters). |
+| `constraints` | list   | no       | `[]`    | Constraints that filter or modify parameter combinations. See [constraints](#constraints). |
+
+The **workspace** is the directory containing `hyperwhip.yaml`. HyperWhip stores its state in a `.hyperwhip/` subdirectory within the workspace.
 
 ---
 
-### `search`
+### `grid`
 
-Controls how parameter combinations are generated.
+Controls how parameter combinations are generated. The `grid` field accepts three forms:
 
-| Field      | Type   | Required | Default  | Description |
-|------------|--------|----------|----------|-------------|
-| `mode`     | string | no       | `"grid"` | `"grid"` or `"axes"`. |
-| `defaults` | object | **yes** if mode is `"axes"` | — | A mapping of every parameter name to its default value. Required for axes mode, ignored for grid mode. |
+| Value | Meaning |
+|-------|---------|
+| `grid: all` | Full Cartesian product of all parameter values. No defaults needed. |
+| `grid: [lr, weight_decay]` | Cartesian product of the listed parameters only. All other parameters are held at their `default` value. |
+| *(omitted)* | One-at-a-time: start from defaults, vary each parameter independently. All parameters must have a `default`. |
 
-**Grid mode** generates the full Cartesian product of all parameter values. If you have 3 parameters with 4, 3, and 2 levels respectively, you get 4 × 3 × 2 = 24 trials.
+**Full grid** (`grid: all`) generates every combination. If you have 3 parameters with 4, 3, and 2 levels respectively, you get 4 × 3 × 2 = 24 trials.
 
-**Axes mode** (one-at-a-time) starts from a default combination, then varies each parameter independently while holding all others at their default. This produces 1 + Σ(levels_i − 1) trials. For the same 4/3/2 example: 1 + 3 + 2 + 1 = 7 trials.
+**Partial grid** (`grid: [lr, wd]`) generates a Cartesian product of only the listed parameters while holding everything else at its default. Useful when you want to explore interactions between specific parameters without exploding the trial count.
+
+**One-at-a-time** (no `grid` field) starts from a default combination, then varies each parameter independently while holding all others at their default. This produces 1 + Σ(levels_i − 1) trials. For the 4/3/2 example: 1 + 3 + 2 + 1 = 7 trials.
 
 ```yaml
-# Grid mode (default):
-search:
-  mode: grid
+# Full grid:
+grid: all
 
-# Axes mode:
-search:
-  mode: axes
-  defaults:
-    learning_rate: 0.001
-    optimizer: adam
-    batch_size: 64
+# Partial grid (only lr and weight_decay):
+grid: [learning_rate, weight_decay]
+
+# One-at-a-time (omit grid entirely):
+# (no grid field)
 ```
+
+When `grid` is not `"all"`, every parameter that is not in the grid list must have a `default` field. When `grid` is omitted, all parameters must have a `default`.
 
 ---
 
@@ -104,30 +113,35 @@ slurm:
 
 ### `hydra`
 
-Configuration for the Hydra command that each trial runs.
+Static Hydra overrides appended to every trial.
 
-| Field              | Type         | Required | Default             | Description |
-|--------------------|--------------|----------|---------------------|-------------|
-| `command`          | string       | no       | `"python train.py"` | The base command to execute. This is informational — the launcher script is responsible for actually running it. It is available for reference in documentation and logs. |
-| `config_path`      | string       | no       | *omitted*           | Path to the Hydra config directory. Informational — pass it in your launcher if needed. |
-| `static_overrides` | list[string] | no       | `[]`                | Hydra overrides appended to every trial's override string. Use for values that are constant across the sweep but differ from Hydra defaults (e.g. `"data.path=/scratch/datasets"`). |
+| Field              | Type         | Required | Default | Description |
+|--------------------|--------------|----------|---------|-------------|
+| `static_overrides` | list[string] | no       | `[]`    | Hydra overrides appended to every trial's override string. Use for values that are constant across the sweep but differ from Hydra defaults. |
 
 ```yaml
 hydra:
-  command: "python train.py"
-  config_path: "./configs"
   static_overrides:
     - "data.path=/scratch/datasets"
     - "trainer.seed=42"
 ```
 
-**How overrides reach the training command**: HyperWhip constructs a Hydra override string for each trial by combining the trial's parameter values with any `static_overrides`. This string is passed as `$1` to your launcher script. For example, a trial might receive:
+**How overrides reach the training command**: HyperWhip constructs a Hydra override string for each trial by combining:
+1. `experiment_name=<name>` (built from parameter abbreviations)
+2. Each parameter's `name=value`
+3. Any `static_overrides`
+
+This string is passed as `$1` to your launcher script. For example:
 
 ```
-learning_rate=0.001 optimizer=adam batch_size=64 data.path=/scratch/datasets trainer.seed=42
+experiment_name=lr=0.001_opt=adam_bs=64 learning_rate=0.001 optimizer=adam batch_size=64 data.path=/scratch/datasets
 ```
 
-Your launcher script is responsible for passing this to the Hydra command (see [Launcher Script](#launcher-script)).
+Additionally, two environment variables are exported in the SLURM script:
+- `HYPERWHIP_TRIAL_ID` — the array task index (same as `$SLURM_ARRAY_TASK_ID`)
+- `HYPERWHIP_EXPERIMENT_NAME` — the experiment name string (e.g. `lr=0.001_opt=adam_bs=64`)
+
+These can be used for output directories, wandb run names, logging, etc.
 
 ---
 
@@ -135,55 +149,61 @@ Your launcher script is responsible for passing this to the Hydra command (see [
 
 A YAML mapping where each key is the parameter name and the value is a specification object. Parameter names should match the Hydra config keys you want to override (e.g. `model.learning_rate`, `training.batch_size`). You can use dotted names for nested Hydra config paths.
 
-Each parameter has a `type` field that determines its other required fields:
+Every parameter requires:
+- `abbrev` — a short name used to build the `experiment_name` (e.g. `"lr"`, `"opt"`, `"bs"`)
+- `type` — either `"discrete"` or `"continuous"`
+- `default` — *(optional)* the default value, required when the parameter is not in the `grid`
 
 #### Discrete parameters
 
-| Field    | Type      | Required | Description |
-|----------|-----------|----------|-------------|
-| `type`   | string    | **yes**  | Must be `"discrete"`. |
-| `values` | list[any] | **yes**  | List of values to sweep over. Can be strings, integers, floats, or booleans. |
+| Field     | Type      | Required | Description |
+|-----------|-----------|----------|-------------|
+| `type`    | string    | **yes**  | Must be `"discrete"`. |
+| `abbrev`  | string    | **yes**  | Short name for experiment naming. |
+| `values`  | list[any] | **yes**  | List of values to sweep over. Can be strings, integers, floats, or booleans. |
+| `default` | any       | no*      | Default value. Must be one of `values`. Required when not in grid. |
 
 ```yaml
 parameters:
   optimizer:
+    abbrev: opt
     type: discrete
     values: [adam, sgd, adamw]
-  use_dropout:
-    type: discrete
-    values: [true, false]
+    default: adam
   num_layers:
+    abbrev: nl
     type: discrete
     values: [2, 4, 8]
+    default: 4
 ```
 
 #### Continuous parameters
 
-| Field   | Type    | Required | Default    | Description |
-|---------|---------|----------|------------|-------------|
-| `type`  | string  | **yes**  | —          | Must be `"continuous"`. |
-| `low`   | float   | **yes**  | —          | Lower bound (inclusive). |
-| `high`  | float   | **yes**  | —          | Upper bound (inclusive). |
-| `scale` | string  | no       | `"linear"` | `"linear"` for uniform spacing, `"log"` for log-uniform spacing. Log scale requires `low > 0` and `high > 0`. |
-| `steps` | integer | no       | `5`        | Number of evenly-spaced points to discretize into. With `steps: 5` and `low: 0, high: 1`, you get `[0.0, 0.25, 0.5, 0.75, 1.0]`. |
+| Field     | Type    | Required | Default    | Description |
+|-----------|---------|----------|------------|-------------|
+| `type`    | string  | **yes**  | —          | Must be `"continuous"`. |
+| `abbrev`  | string  | **yes**  | —          | Short name for experiment naming. |
+| `low`     | float   | **yes**  | —          | Lower bound (inclusive). |
+| `high`    | float   | **yes**  | —          | Upper bound (inclusive). |
+| `scale`   | string  | no       | `"linear"` | `"linear"` for uniform spacing, `"log"` for log-uniform spacing. Log scale requires `low > 0`. |
+| `steps`   | integer | no       | `5`        | Number of evenly-spaced points to discretize into. |
+| `default` | float   | no*      | —          | Default value. Must be within `[low, high]`. Required when not in grid. |
 
 ```yaml
 parameters:
   learning_rate:
+    abbrev: lr
     type: continuous
     low: 1e-5
     high: 1e-2
     scale: log
     steps: 5
-  weight_decay:
-    type: continuous
-    low: 0.0
-    high: 0.1
-    scale: linear
-    steps: 3
+    default: 0.001
 ```
 
 **Log scale discretization**: With `low: 1e-4, high: 1e-2, scale: log, steps: 3`, the values are spaced evenly in log10 space: `[0.0001, 0.001, 0.01]`.
+
+*Default values are validated at config parse time: discrete defaults must be in `values`, continuous defaults must be within `[low, high]`.
 
 ---
 
@@ -195,16 +215,16 @@ Each constraint has:
 
 | Field     | Type   | Required | Description |
 |-----------|--------|----------|-------------|
-| `name`    | string | no       | Human-readable label for this constraint (used in error messages). |
-| `when`    | object | **yes**  | Condition: a mapping of `parameter_name: value`. The constraint activates only for combinations where **all** listed parameters match their specified values. |
-| `exclude` | object | no*      | Exclusion rule: a mapping of `parameter_name: [list of values]`. When the `when` condition matches, any combination where the target parameter has one of these values is **removed**. |
-| `force`   | object | no*      | Force rule: a mapping of `parameter_name: value`. When the `when` condition matches, the target parameter is **overridden** to the specified value. Resulting duplicates are automatically removed. |
+| `name`    | string | no       | Human-readable label (used in error messages). |
+| `when`    | object | **yes**  | Condition: a mapping of `parameter_name: value`. Activates only when **all** listed parameters match. |
+| `exclude` | object | no*      | Exclusion: `parameter_name: [values]`. Removes matching combinations. |
+| `force`   | object | no*      | Override: `parameter_name: value`. Forces the value; duplicates are removed. |
 
 *At least one of `exclude` or `force` is required per constraint.
 
 ```yaml
 constraints:
-  # When optimizer is sgd, remove trials with learning_rate >= 0.01
+  # When optimizer is sgd, remove trials with high learning rates
   - name: sgd_no_high_lr
     when:
       optimizer: sgd
@@ -217,51 +237,35 @@ constraints:
       optimizer: adamw
     force:
       weight_decay: 0.01
-
-  # Compound condition: when optimizer=sgd AND use_nesterov=true, force momentum
-  - name: nesterov_momentum
-    when:
-      optimizer: sgd
-      use_nesterov: true
-    force:
-      momentum: 0.9
 ```
 
-**Constraint evaluation order matters**. Constraints are applied sequentially. An earlier `exclude` constraint can remove combinations before a later `force` constraint sees them.
-
-**Deduplication**: After all constraints are applied, duplicate combinations (identical parameter dictionaries) are removed. This commonly happens with `force` constraints that collapse multiple combinations into one.
+Constraint references are validated at parse time — referencing an undefined parameter name is an error.
 
 ---
 
 ## Launcher Script
 
-The launcher script is a user-provided bash script. HyperWhip does **not** manage your container runtime, environment modules, conda environments, or any other setup. The launcher script is where you handle all of that.
+The launcher script is a user-provided bash script. HyperWhip does **not** manage your container runtime, environment modules, conda environments, or any other setup.
 
 ### Contract
 
 1. HyperWhip calls your launcher as: `bash <launcher_path> "<hydra_overrides>"`
-2. The first argument (`$1`) is a space-separated Hydra override string, e.g.: `learning_rate=0.001 optimizer=adam batch_size=64 data.path=/scratch/datasets`
+2. The first argument (`$1`) is a space-separated Hydra override string.
 3. Your script must invoke the Hydra training command with these overrides.
-4. The script runs inside a SLURM job allocation — SLURM environment variables (`$SLURM_JOB_ID`, `$SLURM_ARRAY_TASK_ID`, etc.) are available.
-5. Exit code 0 means success; nonzero means failure. SLURM marks the task accordingly.
+4. SLURM environment variables (`$SLURM_JOB_ID`, `$SLURM_ARRAY_TASK_ID`, etc.) are available, plus `$HYPERWHIP_TRIAL_ID` and `$HYPERWHIP_EXPERIMENT_NAME`.
+5. Exit code 0 means success; nonzero means failure.
 
 ### Example: Apptainer/Singularity launcher
 
 ```bash
 #!/bin/bash
-# launch.sh — Run training inside an Apptainer container
 set -euo pipefail
 
 OVERRIDES="$1"
 CONTAINER="/path/to/your/container.sif"
-
-# Bind paths: project directory and data
 BINDS="/scratch:/scratch,/home/$USER:/home/$USER"
 
-apptainer exec \
-    --nv \
-    --bind "$BINDS" \
-    "$CONTAINER" \
+apptainer exec --nv --bind "$BINDS" "$CONTAINER" \
     python train.py $OVERRIDES
 ```
 
@@ -269,7 +273,6 @@ apptainer exec \
 
 ```bash
 #!/bin/bash
-# launch.sh — Run training in a conda environment
 set -euo pipefail
 
 OVERRIDES="$1"
@@ -284,7 +287,6 @@ python train.py $OVERRIDES
 
 ```bash
 #!/bin/bash
-# launch.sh — Run training via enroot
 set -euo pipefail
 
 OVERRIDES="$1"
@@ -295,47 +297,20 @@ srun --container-image="$IMAGE" \
      python train.py $OVERRIDES
 ```
 
-### Example: Environment modules launcher
-
-```bash
-#!/bin/bash
-# launch.sh — Run training with environment modules
-set -euo pipefail
-
-OVERRIDES="$1"
-
-module purge
-module load cuda/12.1
-module load python/3.11
-
-source /home/$USER/venvs/training/bin/activate
-
-python train.py $OVERRIDES
-```
-
 ### Idempotency requirements
 
 HyperWhip's `launch` command is idempotent — rerunning it resubmits only pending and failed trials with the same array indices and parameters. For this to work, **your Hydra application must also be idempotent**:
 
-- **Checkpoint on a deterministic path**: Use the Hydra override values to construct a unique output directory so that the same parameters always write to the same location. For example, configure Hydra's `hydra.run.dir` based on the parameter values or `$SLURM_ARRAY_TASK_ID`.
-- **Resume from checkpoint**: On startup, check if a checkpoint exists at the output path and resume from it instead of starting from scratch.
-- **Do not fail on existing output**: If the output directory already exists from a previous (possibly failed) run, the training script should handle this gracefully.
+- **Checkpoint on a deterministic path**: Use `$HYPERWHIP_EXPERIMENT_NAME` or `$HYPERWHIP_TRIAL_ID` to construct a unique, stable output directory.
+- **Resume from checkpoint**: On startup, check if a checkpoint exists and resume.
+- **Do not fail on existing output**: Handle pre-existing output directories gracefully.
 
-Example Hydra config for deterministic output paths:
-
-```yaml
-# In your Hydra config (config.yaml):
-hydra:
-  run:
-    dir: ./outputs/${experiment_name}/trial_${slurm_array_task_id}
-```
-
-Or use the HyperWhip workspace's array task ID in your training script:
+Example using the experiment name for output paths:
 
 ```python
 import os
-task_id = os.environ.get("SLURM_ARRAY_TASK_ID", "0")
-output_dir = f"./outputs/trial_{task_id}"
+exp_name = os.environ.get("HYPERWHIP_EXPERIMENT_NAME", "default")
+output_dir = f"./outputs/{exp_name}"
 ```
 
 ---
@@ -346,21 +321,20 @@ output_dir = f"./outputs/trial_{task_id}"
 
 ```
 my_project/
-  train.py                # Your Hydra training script
+  train.py                  # Your Hydra training script
   configs/
-    config.yaml           # Your Hydra base config
-  hyperwhip.yaml          # HyperWhip sweep configuration
-  launch.sh               # Launcher script
+    config.yaml             # Your Hydra base config
+  my_experiment/
+    hyperwhip.yaml           # HyperWhip sweep configuration
+    launch.sh                # Launcher script
 ```
 
-### `hyperwhip.yaml`
+### `my_experiment/hyperwhip.yaml`
 
 ```yaml
 name: resnet_sweep
-workspace: ./experiments/resnet_sweep
 
-search:
-  mode: grid
+grid: [learning_rate, weight_decay]
 
 slurm:
   partition: gpu
@@ -374,46 +348,49 @@ slurm:
 launcher: ./launch.sh
 
 hydra:
-  command: "python train.py"
-  config_path: "./configs"
   static_overrides:
     - "data.root=/scratch/imagenet"
     - "trainer.max_epochs=90"
 
 parameters:
-  model.learning_rate:
+  learning_rate:
+    abbrev: lr
     type: continuous
     low: 1e-4
     high: 1e-1
     scale: log
     steps: 4
-  model.optimizer:
+    default: 0.001
+  optimizer:
+    abbrev: opt
     type: discrete
     values: [sgd, adamw]
-  model.weight_decay:
+    default: adamw
+  weight_decay:
+    abbrev: wd
     type: continuous
     low: 0.0
     high: 0.01
     scale: linear
     steps: 3
-  data.batch_size:
+    default: 0.001
+  batch_size:
+    abbrev: bs
     type: discrete
     values: [64, 128, 256]
+    default: 128
 
 constraints:
   - name: sgd_no_high_lr
     when:
-      model.optimizer: sgd
+      optimizer: sgd
     exclude:
-      model.learning_rate: [0.1]
-  - name: adamw_fixed_wd
-    when:
-      model.optimizer: adamw
-    force:
-      model.weight_decay: 0.001
+      learning_rate: [0.1]
 ```
 
-### `launch.sh`
+In this example, `grid: [learning_rate, weight_decay]` creates a 4 × 3 = 12 trial grid over learning rate and weight decay, while `optimizer` and `batch_size` stay at their defaults (`adamw` and `128`).
+
+### `my_experiment/launch.sh`
 
 ```bash
 #!/bin/bash
@@ -422,8 +399,7 @@ set -euo pipefail
 OVERRIDES="$1"
 CONTAINER="/shared/containers/pytorch-24.01.sif"
 
-apptainer exec \
-    --nv \
+apptainer exec --nv \
     --bind "/scratch:/scratch,/shared:/shared" \
     "$CONTAINER" \
     python train.py $OVERRIDES
@@ -433,31 +409,36 @@ apptainer exec \
 
 ```bash
 # See what would be submitted:
-hyperwhip launch hyperwhip.yaml --dry-run
+mush launch my_experiment --dry-run
 
 # Submit:
-hyperwhip launch hyperwhip.yaml
+mush launch my_experiment
 
 # Check progress:
-hyperwhip monitor hyperwhip.yaml
+mush monitor my_experiment
+
+# Tail trial 5's log:
+mush tail my_experiment 5
 
 # Re-run to resubmit any failed trials:
-hyperwhip launch hyperwhip.yaml
+mush launch my_experiment
 
 # Clean up everything:
-hyperwhip clean hyperwhip.yaml --all
+mush clean my_experiment --all
 ```
 
 ---
 
 ## Workspace Layout
 
-After `hyperwhip launch`, the workspace directory contains:
+After `mush launch`, the workspace directory contains:
 
 ```
-experiments/resnet_sweep/
+my_experiment/
+  hyperwhip.yaml
+  launch.sh
   .hyperwhip/
-    manifest.json       # Array of trial objects: {index, params, status}
+    manifest.json       # Array of trial objects: {index, params, experiment_name, status}
     job_ids.json        # Records of submitted SLURM jobs
     job.sbatch          # The generated SLURM batch script
     logs/
@@ -466,7 +447,7 @@ experiments/resnet_sweep/
       ...
 ```
 
-- **manifest.json**: The authoritative mapping of array index to parameter values. Do not edit manually.
+- **manifest.json**: The authoritative mapping of array index to parameter values and experiment names. Do not edit manually.
 - **job.sbatch**: The generated script. You can inspect it to verify correctness.
 - **logs/**: SLURM captures stdout/stderr here. The `monitor` command reads the last line of each `.out` file.
 
@@ -479,7 +460,7 @@ For reference, HyperWhip generates a batch script like this:
 ```bash
 #!/bin/bash
 #SBATCH --job-name=hyperwhip_resnet_sweep
-#SBATCH --array=0-23
+#SBATCH --array=0-11
 #SBATCH --partition=gpu
 #SBATCH --time=08:00:00
 #SBATCH --mem=32G
@@ -489,18 +470,22 @@ For reference, HyperWhip generates a batch script like this:
 #SBATCH --error=<workspace>/.hyperwhip/logs/%a.err
 #SBATCH --export=ALL
 
-# Resolve Hydra overrides for this array task
+# Export HyperWhip environment variables
+export HYPERWHIP_TRIAL_ID="$SLURM_ARRAY_TASK_ID"
+export HYPERWHIP_EXPERIMENT_NAME=$(python -m hyperwhip resolve-name "<workspace>/.hyperwhip/manifest.json" "$SLURM_ARRAY_TASK_ID")
+
+# Resolve Hydra overrides for this array task (includes experiment_name=...)
 OVERRIDES=$(python -m hyperwhip resolve-overrides "<workspace>/.hyperwhip/manifest.json" "$SLURM_ARRAY_TASK_ID" --static "data.root=/scratch/imagenet trainer.max_epochs=90")
 
 # Invoke the user's launcher script
-bash "/path/to/launch.sh" "$OVERRIDES"
+bash "<workspace>/launch.sh" "$OVERRIDES"
 ```
 
-The `resolve-overrides` subcommand is an internal HyperWhip utility. It reads `manifest.json`, looks up the entry for `$SLURM_ARRAY_TASK_ID`, and prints the Hydra override string. This means `python` and the `hyperwhip` package must be available on the compute node (outside the container). If your compute nodes don't have Python available outside the container, see the note below.
+The `resolve-overrides` and `resolve-name` subcommands are internal HyperWhip utilities. They read `manifest.json` and print the override string or experiment name for a given array task ID. This means `python` and the `hyperwhip` package must be available on the compute node (outside the container).
 
 ### Compute nodes without Python
 
-If `python` is not available on the bare compute node, you can work around this by modifying your launcher to read the manifest directly. The manifest is a JSON array where each object has an `index` field matching the array task ID and a `params` object. Example launcher that reads the manifest with `jq`:
+If `python` is not available on the bare compute node, you can read the manifest directly in your launcher with `jq`:
 
 ```bash
 #!/bin/bash
@@ -514,8 +499,13 @@ OVERRIDES=$(jq -r --argjson id "$TASK_ID" '
   .[] | select(.index == $id) | .params | to_entries | map("\(.key)=\(.value)") | join(" ")
 ' "$MANIFEST")
 
-# Append static overrides
-OVERRIDES="$OVERRIDES data.root=/scratch/imagenet trainer.max_epochs=90"
+# Get experiment name
+EXPERIMENT_NAME=$(jq -r --argjson id "$TASK_ID" '
+  .[] | select(.index == $id) | .experiment_name
+' "$MANIFEST")
+
+# Prepend experiment_name and append static overrides
+OVERRIDES="experiment_name=$EXPERIMENT_NAME $OVERRIDES data.root=/scratch/imagenet"
 
 CONTAINER="/shared/containers/pytorch-24.01.sif"
 apptainer exec --nv --bind "/scratch:/scratch" "$CONTAINER" \
