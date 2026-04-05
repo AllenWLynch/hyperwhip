@@ -9,6 +9,8 @@ import sys
 from hyperwhip.config import ConfigError, load_config
 from hyperwhip.constraints import apply_constraints
 from hyperwhip.display import print_dry_run, print_status_table, print_summary
+from hyperwhip.init import scaffold
+from hyperwhip.preflight import PreflightError, run_preflight
 from hyperwhip.search import generate_combinations
 from hyperwhip import manifest
 from hyperwhip import slurm
@@ -17,6 +19,15 @@ from hyperwhip import slurm
 def cmd_launch(args):
     """Launch (or re-launch) a hyperparameter sweep as a SLURM job array."""
     config = load_config(args.config)
+
+    # Preflight checks
+    try:
+        warnings = run_preflight(config)
+    except PreflightError as e:
+        print(f"Preflight check failed: {e}", file=sys.stderr)
+        return 1
+    for w in warnings:
+        print(f"Warning: {w}", file=sys.stderr)
 
     # Generate parameter combinations
     combinations = generate_combinations(config)
@@ -125,6 +136,36 @@ def cmd_clean(args):
     return 0
 
 
+def cmd_init(args):
+    """Scaffold a new hyperwhip.yaml and launch.sh."""
+    directory = args.directory or "."
+    try:
+        config_path, launcher_path = scaffold(
+            directory=directory,
+            name=args.name,
+            search_mode=args.search_mode,
+            partition=args.partition,
+            time=args.time,
+            mem=args.mem,
+            cpus=args.cpus,
+            gres=args.gres,
+            command=args.hydra_command,
+            overwrite=args.force,
+        )
+    except FileExistsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Created {config_path}")
+    print(f"Created {launcher_path}")
+    print()
+    print("Next steps:")
+    print("  1. Edit hyperwhip.yaml to define your parameters")
+    print("  2. Edit launch.sh to set up your container/environment")
+    print("  3. Run: hyperwhip launch hyperwhip.yaml --dry-run")
+    return 0
+
+
 def cmd_resolve_overrides(args):
     """Internal subcommand: resolve Hydra overrides for a SLURM array task."""
     manifest_file = args.manifest
@@ -179,6 +220,19 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # init
+    p_init = subparsers.add_parser("init", help="Scaffold a new config and launcher script")
+    p_init.add_argument("directory", nargs="?", default=".", help="Directory to create files in (default: current)")
+    p_init.add_argument("--name", default=None, help="Experiment name (default: directory name)")
+    p_init.add_argument("--search-mode", choices=["grid", "axes"], default="grid", help="Search strategy (default: grid)")
+    p_init.add_argument("--partition", default="default", help="SLURM partition (default: 'default')")
+    p_init.add_argument("--time", default="04:00:00", help="Wall time limit (default: 04:00:00)")
+    p_init.add_argument("--mem", default="8G", help="Memory per node (default: 8G)")
+    p_init.add_argument("--cpus", type=int, default=1, help="CPUs per task (default: 1)")
+    p_init.add_argument("--gres", default=None, help="Generic resources (e.g. gpu:1)")
+    p_init.add_argument("--hydra-command", dest="hydra_command", default="python train.py", help="Hydra training command (default: 'python train.py')")
+    p_init.add_argument("--force", action="store_true", help="Overwrite existing files")
+
     # launch
     p_launch = subparsers.add_parser("launch", help="Submit a hyperparameter sweep")
     p_launch.add_argument("config", help="Path to hyperwhip YAML config file")
@@ -206,6 +260,7 @@ def main():
     args = parser.parse_args()
 
     handlers = {
+        "init": cmd_init,
         "launch": cmd_launch,
         "monitor": cmd_monitor,
         "clean": cmd_clean,

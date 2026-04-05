@@ -1,0 +1,153 @@
+"""Scaffold a starter hyperwhip.yaml and launch.sh."""
+
+import os
+import stat
+
+CONFIG_TEMPLATE = """\
+name: {name}
+workspace: ./{name}
+
+search:
+  mode: {search_mode}
+{defaults_block}
+slurm:
+  partition: {partition}
+  time: "{time}"
+  mem: "{mem}"
+  cpus_per_task: {cpus}
+{gres_line}
+launcher: ./launch.sh
+
+hydra:
+  command: "{command}"
+{static_overrides_block}
+parameters:
+{parameters_block}
+"""
+
+LAUNCHER_TEMPLATE = """\
+#!/bin/bash
+# launch.sh — Launcher script for HyperWhip
+# Receives Hydra overrides as $1. Modify this script to set up your
+# container, conda environment, modules, or any other runtime config.
+set -euo pipefail
+
+OVERRIDES="$1"
+
+# --- Option A: Apptainer/Singularity container ---
+# CONTAINER="/path/to/your/container.sif"
+# apptainer exec --nv --bind "/scratch:/scratch" "$CONTAINER" \\
+#     {command} $OVERRIDES
+
+# --- Option B: Conda environment ---
+# source /opt/conda/etc/profile.d/conda.sh
+# conda activate myenv
+# {command} $OVERRIDES
+
+# --- Option C: Direct execution ---
+{command} $OVERRIDES
+"""
+
+
+def scaffold(
+    directory,
+    name=None,
+    search_mode="grid",
+    partition="default",
+    time="04:00:00",
+    mem="8G",
+    cpus=1,
+    gres=None,
+    command="python train.py",
+    overwrite=False,
+):
+    """Generate hyperwhip.yaml and launch.sh in the given directory.
+
+    Returns (config_path, launcher_path).
+    """
+    directory = os.path.abspath(directory)
+    os.makedirs(directory, exist_ok=True)
+
+    if name is None:
+        name = os.path.basename(directory)
+        if not name or name == ".":
+            name = "experiment"
+
+    config_path = os.path.join(directory, "hyperwhip.yaml")
+    launcher_path = os.path.join(directory, "launch.sh")
+
+    if not overwrite:
+        for path, label in [(config_path, "hyperwhip.yaml"), (launcher_path, "launch.sh")]:
+            if os.path.exists(path):
+                raise FileExistsError(
+                    f"{label} already exists at {path}. Use --force to overwrite."
+                )
+
+    # Build config content
+    gres_line = f'  gres: "{gres}"' if gres else "  # gres: \"gpu:1\"  # uncomment for GPU jobs"
+
+    defaults_block = ""
+    if search_mode == "axes":
+        defaults_block = (
+            "  defaults:\n"
+            "    # Set default value for each parameter:\n"
+            "    # param_name: default_value\n"
+            "\n"
+        )
+
+    static_overrides_block = (
+        "  # static_overrides:\n"
+        "  #   - \"data.path=/scratch/datasets\"\n"
+    )
+
+    parameters_block = _build_example_parameters()
+
+    config_content = CONFIG_TEMPLATE.format(
+        name=name,
+        search_mode=search_mode,
+        defaults_block=defaults_block,
+        partition=partition,
+        time=time,
+        mem=mem,
+        cpus=cpus,
+        gres_line=gres_line,
+        command=command,
+        static_overrides_block=static_overrides_block,
+        parameters_block=parameters_block,
+    )
+
+    launcher_content = LAUNCHER_TEMPLATE.format(command=command)
+
+    with open(config_path, "w") as f:
+        f.write(config_content)
+
+    with open(launcher_path, "w") as f:
+        f.write(launcher_content)
+    os.chmod(launcher_path, os.stat(launcher_path).st_mode | stat.S_IEXEC)
+
+    return config_path, launcher_path
+
+
+def _build_example_parameters():
+    """Return an example parameters block with comments."""
+    return """\
+  # Example continuous parameter (log-scaled):
+  learning_rate:
+    type: continuous
+    low: 1e-5
+    high: 1e-2
+    scale: log
+    steps: 5
+
+  # Example discrete parameter:
+  # optimizer:
+  #   type: discrete
+  #   values: [adam, sgd, adamw]
+
+# constraints:
+#   - name: example_constraint
+#     when:
+#       optimizer: sgd
+#     exclude:
+#       learning_rate: [0.01]
+"""

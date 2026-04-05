@@ -25,7 +25,7 @@ pip install git+<repo-url>
 hyperwhip --help
 ```
 
-This should print the available subcommands: `launch`, `monitor`, `clean`.
+This should print the available subcommands: `init`, `launch`, `monitor`, `clean`.
 
 ### Dependencies
 
@@ -35,80 +35,46 @@ This should print the available subcommands: `launch`, `monitor`, `clean`.
 
 ## Quick Start
 
-### 1. Write a config file
-
-Create `hyperwhip.yaml`:
-
-```yaml
-name: my_sweep
-workspace: ./experiments/my_sweep
-
-search:
-  mode: grid
-
-slurm:
-  partition: gpu
-  time: "04:00:00"
-  mem: "32G"
-  gres: "gpu:1"
-
-launcher: ./launch.sh
-
-hydra:
-  command: "python train.py"
-
-parameters:
-  learning_rate:
-    type: continuous
-    low: 1e-4
-    high: 1e-2
-    scale: log
-    steps: 3
-  optimizer:
-    type: discrete
-    values: [adam, sgd]
-```
-
-### 2. Write a launcher script
-
-Create `launch.sh`:
+### 1. Scaffold a new experiment
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-OVERRIDES="$1"
-
-# Example: run inside an Apptainer container
-apptainer exec --nv /path/to/container.sif python train.py $OVERRIDES
+hyperwhip init my_experiment --partition gpu --gres gpu:1
 ```
 
-### 3. Launch
+This creates `my_experiment/hyperwhip.yaml` and `my_experiment/launch.sh` with sensible defaults. Edit both files to match your setup:
+
+- **hyperwhip.yaml** — define your parameters, search mode, SLURM resources, and constraints
+- **launch.sh** — set up your container, conda environment, or module loads
+
+### 2. Preview and launch
 
 ```bash
-# Preview first:
-hyperwhip launch hyperwhip.yaml --dry-run
+# Preview first (runs preflight checks + prints trial list):
+hyperwhip launch my_experiment/hyperwhip.yaml --dry-run
 
 # Submit:
-hyperwhip launch hyperwhip.yaml
+hyperwhip launch my_experiment/hyperwhip.yaml
 ```
 
-### 4. Monitor
+Preflight checks run automatically before every launch and dry-run. They verify your launcher script exists and is executable, the workspace is writable, parameter definitions are valid, constraint references match defined parameters, and (if on a SLURM node) the partition exists.
+
+### 3. Monitor
 
 ```bash
-hyperwhip monitor hyperwhip.yaml
+hyperwhip monitor my_experiment/hyperwhip.yaml
 ```
 
-### 5. Resubmit failures
+### 4. Resubmit failures
 
 ```bash
 # Re-running launch only resubmits pending/failed trials:
-hyperwhip launch hyperwhip.yaml
+hyperwhip launch my_experiment/hyperwhip.yaml
 ```
 
-### 6. Clean up
+### 5. Clean up
 
 ```bash
-hyperwhip clean hyperwhip.yaml --all
+hyperwhip clean my_experiment/hyperwhip.yaml --all
 ```
 
 ## Documentation
