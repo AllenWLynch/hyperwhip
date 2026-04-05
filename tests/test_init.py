@@ -47,11 +47,11 @@ class TestScaffold(unittest.TestCase):
         mode = os.stat(launcher_path).st_mode
         self.assertTrue(mode & stat.S_IEXEC)
 
-    def test_launcher_contains_command(self):
-        scaffold(self.tmpdir, name="test", command="python my_train.py")
+    def test_launcher_contains_default_command(self):
+        scaffold(self.tmpdir, name="test")
         with open(os.path.join(self.tmpdir, "launch.sh")) as f:
             content = f.read()
-        self.assertIn("python my_train.py $OVERRIDES", content)
+        self.assertIn("python train.py $OVERRIDES", content)
 
     def test_refuses_overwrite_by_default(self):
         scaffold(self.tmpdir, name="test")

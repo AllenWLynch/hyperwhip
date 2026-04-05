@@ -39,8 +39,6 @@ class SlurmConfig:
 
 @dataclass
 class HydraConfig:
-    command: str = "python train.py"
-    config_path: Optional[str] = None
     static_overrides: List[str] = field(default_factory=list)
 
 
@@ -114,8 +112,24 @@ def _parse_constraint(raw: dict) -> Constraint:
     return Constraint(name=name, when=when, exclude=exclude, force=force)
 
 
+CONFIG_FILENAME = "hyperwhip.yaml"
+
+
+def resolve_config_path(path: str) -> str:
+    """Resolve a CLI argument to the config file path.
+
+    Accepts either a directory (workspace) or a direct path to a YAML file.
+    """
+    path = os.path.abspath(path)
+    if os.path.isdir(path):
+        return os.path.join(path, CONFIG_FILENAME)
+    return path
+
+
 def load_config(path: str) -> Config:
     path = os.path.abspath(path)
+    if os.path.isdir(path):
+        path = os.path.join(path, CONFIG_FILENAME)
     if not os.path.isfile(path):
         raise ConfigError(f"Config file not found: {path}")
 
@@ -129,10 +143,9 @@ def load_config(path: str) -> Config:
     if not name:
         raise ConfigError("Config must have a 'name' field")
 
-    workspace = raw.get("workspace", f"./{name}")
+    # Workspace is the directory containing the config file
     config_dir = os.path.dirname(path)
-    if not os.path.isabs(workspace):
-        workspace = os.path.normpath(os.path.join(config_dir, workspace))
+    workspace = config_dir
 
     # Search config
     search_raw = raw.get("search", {})
@@ -157,8 +170,6 @@ def load_config(path: str) -> Config:
     # Hydra config
     hydra_raw = raw.get("hydra", {})
     hydra = HydraConfig(
-        command=hydra_raw.get("command", "python train.py"),
-        config_path=hydra_raw.get("config_path"),
         static_overrides=hydra_raw.get("static_overrides", []),
     )
 

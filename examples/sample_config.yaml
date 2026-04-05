@@ -1,5 +1,4 @@
 name: demo_sweep
-workspace: /tmp/hyperwhip_demo
 
 search:
   mode: grid
@@ -14,7 +13,6 @@ slurm:
 launcher: ./launch.sh
 
 hydra:
-  command: "python train.py"
   static_overrides:
     - "data.path=/scratch/datasets"
 

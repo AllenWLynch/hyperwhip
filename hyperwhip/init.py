@@ -5,7 +5,6 @@ import stat
 
 CONFIG_TEMPLATE = """\
 name: {name}
-workspace: ./{name}
 
 search:
   mode: {search_mode}
@@ -19,7 +18,6 @@ slurm:
 launcher: ./launch.sh
 
 hydra:
-  command: "{command}"
 {static_overrides_block}
 parameters:
 {parameters_block}
@@ -37,15 +35,15 @@ OVERRIDES="$1"
 # --- Option A: Apptainer/Singularity container ---
 # CONTAINER="/path/to/your/container.sif"
 # apptainer exec --nv --bind "/scratch:/scratch" "$CONTAINER" \\
-#     {command} $OVERRIDES
+#     python train.py $OVERRIDES
 
 # --- Option B: Conda environment ---
 # source /opt/conda/etc/profile.d/conda.sh
 # conda activate myenv
-# {command} $OVERRIDES
+# python train.py $OVERRIDES
 
 # --- Option C: Direct execution ---
-{command} $OVERRIDES
+python train.py $OVERRIDES
 """
 
 
@@ -58,7 +56,6 @@ def scaffold(
     mem="8G",
     cpus=1,
     gres=None,
-    command="python train.py",
     overwrite=False,
 ):
     """Generate hyperwhip.yaml and launch.sh in the given directory.
@@ -111,12 +108,11 @@ def scaffold(
         mem=mem,
         cpus=cpus,
         gres_line=gres_line,
-        command=command,
         static_overrides_block=static_overrides_block,
         parameters_block=parameters_block,
     )
 
-    launcher_content = LAUNCHER_TEMPLATE.format(command=command)
+    launcher_content = LAUNCHER_TEMPLATE
 
     with open(config_path, "w") as f:
         f.write(config_content)

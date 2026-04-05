@@ -1,5 +1,4 @@
 name: mock_sweep
-workspace: ./mock_sweep
 
 search:
   mode: grid
@@ -13,7 +12,6 @@ slurm:
 launcher: ./launch.sh
 
 hydra:
-  command: "python train.py"
   static_overrides:
     - "num_epochs=5"
     - "sleep_per_epoch=2"

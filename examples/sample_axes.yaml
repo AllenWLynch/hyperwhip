@@ -1,5 +1,4 @@
 name: demo_axes
-workspace: /tmp/hyperwhip_axes_demo
 
 search:
   mode: axes
@@ -17,8 +16,7 @@ slurm:
 
 launcher: ./launch.sh
 
-hydra:
-  command: "python train.py"
+hydra: {}
 
 parameters:
   learning_rate:

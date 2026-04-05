@@ -18,7 +18,7 @@ from hyperwhip import slurm
 
 def cmd_launch(args):
     """Launch (or re-launch) a hyperparameter sweep as a SLURM job array."""
-    config = load_config(args.config)
+    config = load_config(args.workspace)
 
     # Preflight checks
     try:
@@ -86,7 +86,7 @@ def cmd_launch(args):
 
 def cmd_monitor(args):
     """Show the status of all trials in a hyperparameter sweep."""
-    config = load_config(args.config)
+    config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
         print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
@@ -109,7 +109,7 @@ def cmd_monitor(args):
 
 def cmd_tail(args):
     """Print the last N lines of a trial's log file."""
-    config = load_config(args.config)
+    config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
         print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
@@ -156,7 +156,7 @@ def cmd_tail(args):
 
 def cmd_clean(args):
     """Cancel running jobs and clean up workspace."""
-    config = load_config(args.config)
+    config = load_config(args.workspace)
     ws = manifest.workspace_path(config.workspace)
 
     if not os.path.isdir(ws):
@@ -199,7 +199,6 @@ def cmd_init(args):
             mem=args.mem,
             cpus=args.cpus,
             gres=args.gres,
-            command=args.hydra_command,
             overwrite=args.force,
         )
     except FileExistsError as e:
@@ -212,7 +211,7 @@ def cmd_init(args):
     print("Next steps:")
     print("  1. Edit hyperwhip.yaml to define your parameters")
     print("  2. Edit launch.sh to set up your container/environment")
-    print("  3. Run: hyperwhip launch hyperwhip.yaml --dry-run")
+    print(f"  3. Run: hyperwhip launch {directory} --dry-run")
     return 0
 
 
@@ -295,12 +294,11 @@ def main():
     p_init.add_argument("--mem", default="8G", help="Memory per node (default: 8G)")
     p_init.add_argument("--cpus", type=int, default=1, help="CPUs per task (default: 1)")
     p_init.add_argument("--gres", default=None, help="Generic resources (e.g. gpu:1)")
-    p_init.add_argument("--hydra-command", dest="hydra_command", default="python train.py", help="Hydra training command (default: 'python train.py')")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing files")
 
     # launch
     p_launch = subparsers.add_parser("launch", help="Submit a hyperparameter sweep")
-    p_launch.add_argument("config", help="Path to hyperwhip YAML config file")
+    p_launch.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
     p_launch.add_argument(
         "--dry-run", action="store_true",
         help="Print the sbatch script and trial list without submitting"
@@ -308,20 +306,20 @@ def main():
 
     # monitor
     p_monitor = subparsers.add_parser("monitor", help="Show status of all trials")
-    p_monitor.add_argument("config", help="Path to hyperwhip YAML config file")
+    p_monitor.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
 
     # tail
     p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log")
-    p_tail.add_argument("config", help="Path to hyperwhip YAML config file")
+    p_tail.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
     p_tail.add_argument("index", type=int, help="Trial index to tail")
     p_tail.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show (default: 20)")
     p_tail.add_argument("--stderr", action="store_true", help="Show stderr log instead of stdout")
 
     # clean
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
-    p_clean.add_argument("config", help="Path to hyperwhip YAML config file")
+    p_clean.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
     p_clean.add_argument("--logs", action="store_true", help="Remove log files")
-    p_clean.add_argument("--all", action="store_true", help="Remove entire workspace")
+    p_clean.add_argument("--all", action="store_true", help="Remove entire .hyperwhip state")
 
     # Internal: resolve-overrides (called from within sbatch script)
     p_resolve = subparsers.add_parser("resolve-overrides", help=argparse.SUPPRESS)
