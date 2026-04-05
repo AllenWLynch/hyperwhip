@@ -200,8 +200,10 @@ def cmd_init(args):
             cpus=args.cpus,
             gres=args.gres,
             overwrite=args.force,
+            from_config=args.config,
+            from_launcher=args.launcher,
         )
-    except FileExistsError as e:
+    except (FileExistsError, FileNotFoundError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
@@ -294,6 +296,8 @@ def main():
     p_init.add_argument("--mem", default="8G", help="Memory per node (default: 8G)")
     p_init.add_argument("--cpus", type=int, default=1, help="CPUs per task (default: 1)")
     p_init.add_argument("--gres", default=None, help="Generic resources (e.g. gpu:1)")
+    p_init.add_argument("--config", default=None, help="Copy this file as hyperwhip.yaml instead of generating a template")
+    p_init.add_argument("--launcher", default=None, help="Copy this file as launch.sh instead of generating a template")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing files")
 
     # launch

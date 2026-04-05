@@ -60,11 +60,18 @@ def scaffold(
     cpus=1,
     gres=None,
     overwrite=False,
+    from_config=None,
+    from_launcher=None,
 ):
     """Generate hyperwhip.yaml and launch.sh in the given directory.
 
+    If from_config is given, copies that file instead of generating a template.
+    If from_launcher is given, copies that file instead of generating a template.
+
     Returns (config_path, launcher_path).
     """
+    import shutil
+
     directory = os.path.abspath(directory)
     os.makedirs(directory, exist_ok=True)
 
@@ -83,40 +90,47 @@ def scaffold(
                     f"{label} already exists at {path}. Use --force to overwrite."
                 )
 
-    # Build config content
-    gres_line = f'  gres: "{gres}"' if gres else "  # gres: \"gpu:1\"  # uncomment for GPU jobs"
-
-    if grid == "all":
-        grid_line = "grid: all"
+    # Config: copy from source or generate from template
+    if from_config:
+        src = os.path.abspath(from_config)
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"Config source not found: {src}")
+        shutil.copy2(src, config_path)
     else:
-        grid_line = "# grid: all"
+        gres_line = f'  gres: "{gres}"' if gres else "  # gres: \"gpu:1\"  # uncomment for GPU jobs"
+        grid_line = "grid: all" if grid == "all" else "# grid: all"
 
-    static_overrides_block = (
-        "  # static_overrides:\n"
-        "  #   - \"data.path=/scratch/datasets\"\n"
-    )
+        static_overrides_block = (
+            "  # static_overrides:\n"
+            "  #   - \"data.path=/scratch/datasets\"\n"
+        )
+        parameters_block = _build_example_parameters()
 
-    parameters_block = _build_example_parameters()
+        config_content = CONFIG_TEMPLATE.format(
+            name=name,
+            grid_line=grid_line,
+            partition=partition,
+            time=time,
+            mem=mem,
+            cpus=cpus,
+            gres_line=gres_line,
+            static_overrides_block=static_overrides_block,
+            parameters_block=parameters_block,
+        )
+        with open(config_path, "w") as f:
+            f.write(config_content)
 
-    config_content = CONFIG_TEMPLATE.format(
-        name=name,
-        grid_line=grid_line,
-        partition=partition,
-        time=time,
-        mem=mem,
-        cpus=cpus,
-        gres_line=gres_line,
-        static_overrides_block=static_overrides_block,
-        parameters_block=parameters_block,
-    )
+    # Launcher: copy from source or generate from template
+    if from_launcher:
+        src = os.path.abspath(from_launcher)
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"Launcher source not found: {src}")
+        shutil.copy2(src, launcher_path)
+    else:
+        with open(launcher_path, "w") as f:
+            f.write(LAUNCHER_TEMPLATE)
 
-    launcher_content = LAUNCHER_TEMPLATE
-
-    with open(config_path, "w") as f:
-        f.write(config_content)
-
-    with open(launcher_path, "w") as f:
-        f.write(launcher_content)
+    # Ensure launcher is executable
     os.chmod(launcher_path, os.stat(launcher_path).st_mode | stat.S_IEXEC)
 
     return config_path, launcher_path
