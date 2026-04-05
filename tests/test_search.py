@@ -22,7 +22,7 @@ def _make_config(parameters, mode="grid", defaults=None):
 
 class TestDiscretizeContinuous(unittest.TestCase):
     def test_linear(self):
-        p = ParameterSpec(name="x", type="continuous", low=0.0, high=1.0, scale="linear", steps=5)
+        p = ParameterSpec(name="x", abbrev="x", type="continuous", low=0.0, high=1.0, scale="linear", steps=5)
         vals = _discretize_continuous(p)
         self.assertEqual(len(vals), 5)
         self.assertAlmostEqual(vals[0], 0.0)
@@ -30,7 +30,7 @@ class TestDiscretizeContinuous(unittest.TestCase):
         self.assertAlmostEqual(vals[2], 0.5)
 
     def test_log(self):
-        p = ParameterSpec(name="lr", type="continuous", low=1e-4, high=1e-2, scale="log", steps=3)
+        p = ParameterSpec(name="lr", abbrev="lr", type="continuous", low=1e-4, high=1e-2, scale="log", steps=3)
         vals = _discretize_continuous(p)
         self.assertEqual(len(vals), 3)
         self.assertAlmostEqual(vals[0], 1e-4)
@@ -38,7 +38,7 @@ class TestDiscretizeContinuous(unittest.TestCase):
         self.assertAlmostEqual(vals[2], 1e-2)
 
     def test_single_step(self):
-        p = ParameterSpec(name="x", type="continuous", low=5.0, high=10.0, scale="linear", steps=1)
+        p = ParameterSpec(name="x", abbrev="x", type="continuous", low=5.0, high=10.0, scale="linear", steps=1)
         vals = _discretize_continuous(p)
         self.assertEqual(vals, [5.0])
 
@@ -46,8 +46,8 @@ class TestDiscretizeContinuous(unittest.TestCase):
 class TestGridSearch(unittest.TestCase):
     def test_all_discrete(self):
         params = [
-            ParameterSpec(name="a", type="discrete", values=[1, 2]),
-            ParameterSpec(name="b", type="discrete", values=["x", "y", "z"]),
+            ParameterSpec(name="a", abbrev="a", type="discrete", values=[1, 2]),
+            ParameterSpec(name="b", abbrev="b", type="discrete", values=["x", "y", "z"]),
         ]
         config = _make_config(params)
         combos = generate_combinations(config)
@@ -60,15 +60,15 @@ class TestGridSearch(unittest.TestCase):
 
     def test_mixed_types(self):
         params = [
-            ParameterSpec(name="lr", type="continuous", low=0.1, high=1.0, scale="linear", steps=3),
-            ParameterSpec(name="opt", type="discrete", values=["a", "b"]),
+            ParameterSpec(name="lr", abbrev="lr", type="continuous", low=0.1, high=1.0, scale="linear", steps=3),
+            ParameterSpec(name="opt", abbrev="opt", type="discrete", values=["a", "b"]),
         ]
         config = _make_config(params)
         combos = generate_combinations(config)
         self.assertEqual(len(combos), 6)  # 3 * 2
 
     def test_single_param(self):
-        params = [ParameterSpec(name="x", type="discrete", values=[10, 20, 30])]
+        params = [ParameterSpec(name="x", abbrev="x", type="discrete", values=[10, 20, 30])]
         config = _make_config(params)
         combos = generate_combinations(config)
         self.assertEqual(len(combos), 3)
@@ -77,8 +77,8 @@ class TestGridSearch(unittest.TestCase):
 class TestAxesSearch(unittest.TestCase):
     def test_basic_axes(self):
         params = [
-            ParameterSpec(name="a", type="discrete", values=[1, 2, 3]),
-            ParameterSpec(name="b", type="discrete", values=["x", "y"]),
+            ParameterSpec(name="a", abbrev="a", type="discrete", values=[1, 2, 3]),
+            ParameterSpec(name="b", abbrev="b", type="discrete", values=["x", "y"]),
         ]
         defaults = {"a": 1, "b": "x"}
         config = _make_config(params, mode="axes", defaults=defaults)
@@ -92,8 +92,8 @@ class TestAxesSearch(unittest.TestCase):
 
     def test_axes_no_duplicates(self):
         params = [
-            ParameterSpec(name="a", type="discrete", values=[1, 2]),
-            ParameterSpec(name="b", type="discrete", values=[10, 20]),
+            ParameterSpec(name="a", abbrev="a", type="discrete", values=[1, 2]),
+            ParameterSpec(name="b", abbrev="b", type="discrete", values=[10, 20]),
         ]
         defaults = {"a": 1, "b": 10}
         config = _make_config(params, mode="axes", defaults=defaults)

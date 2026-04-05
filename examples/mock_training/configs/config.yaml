@@ -1,0 +1,17 @@
+# Hydra base config for the mock training script
+
+# These get overridden by HyperWhip per-trial:
+learning_rate: 0.001
+optimizer: adam
+batch_size: 64
+
+# Passed by HyperWhip for output directory naming:
+experiment_name: default
+
+# Training params (constant across sweep):
+num_epochs: 5
+sleep_per_epoch: 2       # seconds to sleep per epoch (simulates training)
+failure_probability: 0.3  # probability of random failure per epoch
+
+# Output
+output_dir: ./outputs/${experiment_name}

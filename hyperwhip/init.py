@@ -133,6 +133,7 @@ def _build_example_parameters():
     return """\
   # Example continuous parameter (log-scaled):
   learning_rate:
+    abbrev: lr        # short name used in experiment_name (e.g. "lr=0.001_opt=adam")
     type: continuous
     low: 1e-5
     high: 1e-2
@@ -141,6 +142,7 @@ def _build_example_parameters():
 
   # Example discrete parameter:
   # optimizer:
+  #   abbrev: opt
   #   type: discrete
   #   values: [adam, sgd, adamw]
 

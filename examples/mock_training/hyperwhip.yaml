@@ -1,0 +1,34 @@
+name: mock_sweep
+workspace: ./mock_sweep
+
+search:
+  mode: grid
+
+slurm:
+  partition: default
+  time: "00:30:00"
+  mem: "1G"
+  cpus_per_task: 1
+
+launcher: ./launch.sh
+
+hydra:
+  command: "python train.py"
+  static_overrides:
+    - "num_epochs=5"
+    - "sleep_per_epoch=2"
+    - "failure_probability=0.3"
+
+parameters:
+  learning_rate:
+    abbrev: lr
+    type: discrete
+    values: [0.01, 0.001, 0.0001]
+  optimizer:
+    abbrev: opt
+    type: discrete
+    values: [adam, sgd]
+  batch_size:
+    abbrev: bs
+    type: discrete
+    values: [32, 64]

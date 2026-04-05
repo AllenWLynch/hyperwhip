@@ -46,7 +46,12 @@ def generate_sbatch_script(config: Config, indices: List[int]) -> str:
 
     lines.extend([
         "",
-        "# Resolve Hydra overrides for this array task",
+        "# Export HyperWhip environment variables",
+        "export HYPERWHIP_TRIAL_ID=\"$SLURM_ARRAY_TASK_ID\"",
+        f'export HYPERWHIP_EXPERIMENT_NAME=$(python -m hyperwhip resolve-name '
+        f'"{ws}/{manifest.MANIFEST_FILE}" "$SLURM_ARRAY_TASK_ID")',
+        "",
+        "# Resolve Hydra overrides for this array task (includes experiment_name=...)",
         f'OVERRIDES=$(python -m hyperwhip resolve-overrides "{ws}/{manifest.MANIFEST_FILE}" '
         f'"$SLURM_ARRAY_TASK_ID"{static_flag})',
         "",

@@ -10,6 +10,7 @@ import yaml
 @dataclass
 class ParameterSpec:
     name: str
+    abbrev: str  # short abbreviation used in experiment_name (e.g. "lr", "opt", "bs")
     type: str  # "discrete" or "continuous"
     values: Optional[List[Any]] = None  # for discrete
     low: Optional[float] = None  # for continuous
@@ -71,11 +72,16 @@ def _parse_parameter(name: str, spec: dict) -> ParameterSpec:
         raise ConfigError(
             f"Parameter '{name}': type must be 'discrete' or 'continuous', got '{ptype}'"
         )
+    abbrev = spec.get("abbrev")
+    if not abbrev or not isinstance(abbrev, str):
+        raise ConfigError(
+            f"Parameter '{name}': 'abbrev' is required (short name for experiment naming, e.g. 'lr')"
+        )
     if ptype == "discrete":
         values = spec.get("values")
         if not values or not isinstance(values, list):
             raise ConfigError(f"Parameter '{name}': discrete type requires a 'values' list")
-        return ParameterSpec(name=name, type="discrete", values=values)
+        return ParameterSpec(name=name, abbrev=abbrev, type="discrete", values=values)
     else:
         low = spec.get("low")
         high = spec.get("high")
@@ -83,6 +89,7 @@ def _parse_parameter(name: str, spec: dict) -> ParameterSpec:
             raise ConfigError(f"Parameter '{name}': continuous type requires 'low' and 'high'")
         return ParameterSpec(
             name=name,
+            abbrev=abbrev,
             type="continuous",
             low=float(low),
             high=float(high),

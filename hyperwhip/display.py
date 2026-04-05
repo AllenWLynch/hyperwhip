@@ -114,5 +114,7 @@ def print_dry_run(trials: List[dict], sbatch_script: str) -> None:
     print()
     for trial in trials:
         idx = trial["index"]
+        exp_name = trial.get("experiment_name", "")
+        name_str = f"  {exp_name}" if exp_name else ""
         params = format_params(trial["params"])
-        print(f"  [{idx:>4}] {params}")
+        print(f"  [{idx:>4}] {params}{name_str}")

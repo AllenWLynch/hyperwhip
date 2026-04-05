@@ -20,15 +20,18 @@ hydra:
 
 parameters:
   learning_rate:
+    abbrev: lr
     type: continuous
     low: 1e-4
     high: 1e-2
     scale: log
     steps: 3
   optimizer:
+    abbrev: opt
     type: discrete
     values: [adam, sgd]
   batch_size:
+    abbrev: bs
     type: discrete
     values: [32, 64]
 

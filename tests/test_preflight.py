@@ -22,7 +22,7 @@ def _make_config(
 ):
     """Build a Config for testing. Creates a real launcher file if launcher is None."""
     if parameters is None:
-        parameters = [ParameterSpec(name="lr", type="discrete", values=[0.1, 0.01])]
+        parameters = [ParameterSpec(name="lr", abbrev="lr", type="discrete", values=[0.1, 0.01])]
     if constraints is None:
         constraints = []
 
@@ -119,21 +119,21 @@ class TestParameterChecks(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def test_empty_discrete_values(self):
-        params = [ParameterSpec(name="x", type="discrete", values=[])]
+        params = [ParameterSpec(name="x", abbrev="x", type="discrete", values=[])]
         config = _make_config(launcher=self.launcher, workspace=self.tmpdir, parameters=params)
         with self.assertRaises(PreflightError) as ctx:
             run_preflight(config)
         self.assertIn("empty values", str(ctx.exception))
 
     def test_continuous_low_ge_high(self):
-        params = [ParameterSpec(name="x", type="continuous", low=1.0, high=0.5, steps=3)]
+        params = [ParameterSpec(name="x", abbrev="x", type="continuous", low=1.0, high=0.5, steps=3)]
         config = _make_config(launcher=self.launcher, workspace=self.tmpdir, parameters=params)
         with self.assertRaises(PreflightError) as ctx:
             run_preflight(config)
         self.assertIn("less than high", str(ctx.exception))
 
     def test_log_scale_negative_low(self):
-        params = [ParameterSpec(name="x", type="continuous", low=-1.0, high=1.0, scale="log", steps=3)]
+        params = [ParameterSpec(name="x", abbrev="x", type="continuous", low=-1.0, high=1.0, scale="log", steps=3)]
         config = _make_config(launcher=self.launcher, workspace=self.tmpdir, parameters=params)
         with self.assertRaises(PreflightError) as ctx:
             run_preflight(config)
@@ -152,7 +152,7 @@ class TestConstraintRefChecks(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def test_unknown_when_param(self):
-        params = [ParameterSpec(name="lr", type="discrete", values=[0.1])]
+        params = [ParameterSpec(name="lr", abbrev="lr", type="discrete", values=[0.1])]
         constraints = [Constraint(name="c1", when={"nonexistent": "val"}, exclude={"lr": [0.1]})]
         config = _make_config(
             launcher=self.launcher, workspace=self.tmpdir,
@@ -163,7 +163,7 @@ class TestConstraintRefChecks(unittest.TestCase):
         self.assertIn("unknown parameter 'nonexistent'", str(ctx.exception))
 
     def test_unknown_exclude_param(self):
-        params = [ParameterSpec(name="lr", type="discrete", values=[0.1])]
+        params = [ParameterSpec(name="lr", abbrev="lr", type="discrete", values=[0.1])]
         constraints = [Constraint(name="c1", when={"lr": 0.1}, exclude={"bogus": [1]})]
         config = _make_config(
             launcher=self.launcher, workspace=self.tmpdir,
@@ -174,7 +174,7 @@ class TestConstraintRefChecks(unittest.TestCase):
         self.assertIn("unknown parameter 'bogus'", str(ctx.exception))
 
     def test_unknown_force_param(self):
-        params = [ParameterSpec(name="lr", type="discrete", values=[0.1])]
+        params = [ParameterSpec(name="lr", abbrev="lr", type="discrete", values=[0.1])]
         constraints = [Constraint(name="c1", when={"lr": 0.1}, force={"missing": 99})]
         config = _make_config(
             launcher=self.launcher, workspace=self.tmpdir,
@@ -186,8 +186,8 @@ class TestConstraintRefChecks(unittest.TestCase):
 
     def test_valid_constraint_refs(self):
         params = [
-            ParameterSpec(name="lr", type="discrete", values=[0.1, 0.01]),
-            ParameterSpec(name="opt", type="discrete", values=["adam", "sgd"]),
+            ParameterSpec(name="lr", abbrev="lr", type="discrete", values=[0.1, 0.01]),
+            ParameterSpec(name="opt", abbrev="opt", type="discrete", values=["adam", "sgd"]),
         ]
         constraints = [Constraint(name="c1", when={"opt": "sgd"}, exclude={"lr": [0.1]})]
         config = _make_config(
@@ -209,7 +209,7 @@ class TestAxesDefaultsCheck(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def test_axes_default_not_in_values(self):
-        params = [ParameterSpec(name="opt", type="discrete", values=["adam", "sgd"])]
+        params = [ParameterSpec(name="opt", abbrev="opt", type="discrete", values=["adam", "sgd"])]
         config = _make_config(
             launcher=self.launcher, workspace=self.tmpdir,
             parameters=params, search_mode="axes", defaults={"opt": "rmsprop"},
@@ -219,7 +219,7 @@ class TestAxesDefaultsCheck(unittest.TestCase):
         self.assertIn("not in its values list", str(ctx.exception))
 
     def test_axes_continuous_default_out_of_range(self):
-        params = [ParameterSpec(name="lr", type="continuous", low=0.001, high=0.1, steps=3)]
+        params = [ParameterSpec(name="lr", abbrev="lr", type="continuous", low=0.001, high=0.1, steps=3)]
         config = _make_config(
             launcher=self.launcher, workspace=self.tmpdir,
             parameters=params, search_mode="axes", defaults={"lr": 999.0},
@@ -230,8 +230,8 @@ class TestAxesDefaultsCheck(unittest.TestCase):
 
     def test_axes_valid_defaults(self):
         params = [
-            ParameterSpec(name="lr", type="continuous", low=0.001, high=0.1, steps=3),
-            ParameterSpec(name="opt", type="discrete", values=["adam", "sgd"]),
+            ParameterSpec(name="lr", abbrev="lr", type="continuous", low=0.001, high=0.1, steps=3),
+            ParameterSpec(name="opt", abbrev="opt", type="discrete", values=["adam", "sgd"]),
         ]
         config = _make_config(
             launcher=self.launcher, workspace=self.tmpdir,

@@ -46,13 +46,39 @@ def workspace_exists(base: str) -> bool:
 
 # --- Manifest operations ---
 
-def create_manifest(base: str, combinations: List[Dict[str, Any]]) -> List[dict]:
+def build_experiment_name(
+    params: Dict[str, Any], abbrevs: Dict[str, str]
+) -> str:
+    """Construct a deterministic experiment name from parameter abbreviations and values.
+
+    Example: with abbrevs={"learning_rate": "lr", "optimizer": "opt"} and
+    params={"learning_rate": 0.001, "optimizer": "adam"},
+    returns "lr=0.001_opt=adam".
+    """
+    parts = []
+    for param_name, value in params.items():
+        abbr = abbrevs.get(param_name, param_name)
+        if isinstance(value, float):
+            parts.append(f"{abbr}={value:.4g}")
+        else:
+            parts.append(f"{abbr}={value}")
+    return "_".join(parts)
+
+
+def create_manifest(
+    base: str,
+    combinations: List[Dict[str, Any]],
+    abbrevs: Optional[Dict[str, str]] = None,
+) -> List[dict]:
     """Create a new manifest from parameter combinations."""
+    if abbrevs is None:
+        abbrevs = {}
     trials = []
     for i, combo in enumerate(combinations):
         trials.append({
             "index": i,
             "params": combo,
+            "experiment_name": build_experiment_name(combo, abbrevs),
             "status": "pending",
         })
     _write_manifest(base, trials)
@@ -143,7 +169,11 @@ def _write_job_ids(base: str, records: List[dict]) -> None:
 def resolve_overrides(
     base: str, task_id: int, static_overrides: Optional[List[str]] = None
 ) -> str:
-    """Build the Hydra override string for a given array task ID."""
+    """Build the Hydra override string for a given array task ID.
+
+    Includes experiment_name=<name> as the first override so it can be used
+    for output directories, wandb run names, etc.
+    """
     trials = load_manifest(base)
     trial = None
     for t in trials:
@@ -155,6 +185,12 @@ def resolve_overrides(
         raise ValueError(f"No trial found for task ID {task_id}")
 
     parts = []
+
+    # Include experiment_name as a hydra override
+    exp_name = trial.get("experiment_name", "")
+    if exp_name:
+        parts.append(f"experiment_name={exp_name}")
+
     for param, value in trial["params"].items():
         if isinstance(value, float):
             parts.append(f"{param}={value:.10g}")

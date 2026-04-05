@@ -40,6 +40,9 @@ def cmd_launch(args):
     # Initialize workspace
     manifest.init_workspace(config.workspace)
 
+    # Build abbreviation mapping for experiment names
+    abbrevs = {p.name: p.abbrev for p in config.parameters}
+
     # Create or load manifest
     if manifest.workspace_exists(config.workspace):
         existing = manifest.load_manifest(config.workspace)
@@ -54,10 +57,10 @@ def cmd_launch(args):
             print(f"  {len(pending)} trials need (re)submission.")
             trials = existing
         else:
-            trials = manifest.create_manifest(config.workspace, combinations)
+            trials = manifest.create_manifest(config.workspace, combinations, abbrevs)
             pending = [t["index"] for t in trials]
     else:
-        trials = manifest.create_manifest(config.workspace, combinations)
+        trials = manifest.create_manifest(config.workspace, combinations, abbrevs)
         pending = [t["index"] for t in trials]
 
     # Generate sbatch script
@@ -101,6 +104,53 @@ def cmd_monitor(args):
 
     print_status_table(trials, log_tails)
     print_summary(trials)
+    return 0
+
+
+def cmd_tail(args):
+    """Print the last N lines of a trial's log file."""
+    config = load_config(args.config)
+
+    if not manifest.workspace_exists(config.workspace):
+        print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
+        return 1
+
+    index = args.index
+    lines = args.lines
+    stderr = args.stderr
+
+    ext = "err" if stderr else "out"
+    log_file = os.path.join(manifest.logs_path(config.workspace), f"{index}.{ext}")
+
+    if not os.path.isfile(log_file):
+        print(f"Log file not found: {log_file}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(log_file, "r") as f:
+            all_lines = f.readlines()
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"Could not read log file: {e}", file=sys.stderr)
+        return 1
+
+    tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+    # Print trial info header
+    trials = manifest.load_manifest(config.workspace)
+    for t in trials:
+        if t["index"] == index:
+            exp_name = t.get("experiment_name", "")
+            status = t.get("status", "unknown")
+            print(f"Trial {index} [{status}] {exp_name}")
+            print(f"Log: {log_file} (last {len(tail)} lines)")
+            print("-" * 60)
+            break
+
+    for line in tail:
+        print(line, end="")
+
+    if tail and not tail[-1].endswith("\n"):
+        print()
+
     return 0
 
 
@@ -179,6 +229,21 @@ def cmd_resolve_overrides(args):
     return 0
 
 
+def cmd_resolve_name(args):
+    """Internal subcommand: print the experiment_name for a SLURM array task."""
+    manifest_file = args.manifest
+    task_id = int(args.task_id)
+
+    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperwhip/../
+    trials = manifest.load_manifest(base)
+    for t in trials:
+        if t["index"] == task_id:
+            print(t.get("experiment_name", ""))
+            return 0
+    print(f"No trial found for task ID {task_id}", file=sys.stderr)
+    return 1
+
+
 def _sync_slurm_status(workspace: str):
     """Sync trial statuses from SLURM job tracking data."""
     job_records = manifest.get_job_ids(workspace)
@@ -245,6 +310,13 @@ def main():
     p_monitor = subparsers.add_parser("monitor", help="Show status of all trials")
     p_monitor.add_argument("config", help="Path to hyperwhip YAML config file")
 
+    # tail
+    p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log")
+    p_tail.add_argument("config", help="Path to hyperwhip YAML config file")
+    p_tail.add_argument("index", type=int, help="Trial index to tail")
+    p_tail.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show (default: 20)")
+    p_tail.add_argument("--stderr", action="store_true", help="Show stderr log instead of stdout")
+
     # clean
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
     p_clean.add_argument("config", help="Path to hyperwhip YAML config file")
@@ -257,14 +329,21 @@ def main():
     p_resolve.add_argument("task_id", help="SLURM_ARRAY_TASK_ID")
     p_resolve.add_argument("--static", default="", help="Static Hydra overrides")
 
+    # Internal: resolve-name (called from within sbatch script)
+    p_name = subparsers.add_parser("resolve-name", help=argparse.SUPPRESS)
+    p_name.add_argument("manifest", help="Path to manifest.json")
+    p_name.add_argument("task_id", help="SLURM_ARRAY_TASK_ID")
+
     args = parser.parse_args()
 
     handlers = {
         "init": cmd_init,
         "launch": cmd_launch,
         "monitor": cmd_monitor,
+        "tail": cmd_tail,
         "clean": cmd_clean,
         "resolve-overrides": cmd_resolve_overrides,
+        "resolve-name": cmd_resolve_name,
     }
 
     rc = handlers[args.command](args)
