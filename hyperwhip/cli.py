@@ -432,7 +432,7 @@ def main():
     p_init.add_argument("--force", action="store_true", help="Overwrite existing files")
 
     # launch
-    p_launch = subparsers.add_parser("launch", help="Submit a hyperparameter sweep")
+    p_launch = subparsers.add_parser("run", help="Submit a hyperparameter sweep")
     p_launch.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
     p_launch.add_argument(
         "--dry-run", action="store_true",
@@ -440,7 +440,7 @@ def main():
     )
 
     # monitor
-    p_monitor = subparsers.add_parser("monitor", help="Show status of all trials")
+    p_monitor = subparsers.add_parser("status", help="Show status of all trials")
     p_monitor.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
 
     # test
@@ -456,7 +456,7 @@ def main():
     p_tail.add_argument("--stderr", action="store_true", help="Show stderr log instead of stdout")
 
     # results
-    p_results = subparsers.add_parser("results", help="Print TSV of trial parameters and logged metrics")
+    p_results = subparsers.add_parser("res", help="Print TSV of trial parameters and logged metrics")
     p_results.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
 
     # clean
