@@ -14,6 +14,7 @@ from hyperwhip.preflight import PreflightError, run_preflight
 from hyperwhip.search import generate_combinations
 from hyperwhip import manifest
 from hyperwhip import slurm
+from hyperwhip.logging import load_all_results
 
 
 def cmd_launch(args):
@@ -208,6 +209,7 @@ def cmd_test(args):
 
     # Set env vars to match what the sbatch script would export
     env = os.environ.copy()
+    env["HYPERWHIP_WORKSPACE"] = config.workspace
     env["HYPERWHIP_TRIAL_ID"] = str(index)
     env["HYPERWHIP_EXPERIMENT_NAME"] = exp_name
 
@@ -225,6 +227,62 @@ def cmd_test(args):
         print(f"Trial {index}: Hydra config validation failed (exit code {result.returncode}).")
 
     return result.returncode
+
+
+def cmd_results(args):
+    """Print a TSV of trial parameters and logged metrics."""
+    config = load_config(args.workspace)
+
+    if not manifest.workspace_exists(config.workspace):
+        print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
+        return 1
+
+    trials = manifest.load_manifest(config.workspace)
+    results = load_all_results(config.workspace)
+
+    if not results:
+        print("No results logged yet. Use hyperwhip.log_result() from your training script.", file=sys.stderr)
+        return 1
+
+    # Collect all metric names across trials
+    metric_names = []
+    seen = set()
+    for trial_results in results.values():
+        for k in trial_results:
+            if k not in seen:
+                metric_names.append(k)
+                seen.add(k)
+
+    # Build header: trial_id, experiment_name, param1, param2, ..., metric1, metric2, ...
+    param_names = config.param_names
+    header = ["trial_id", "experiment_name"] + param_names + metric_names
+
+    sep = "\t"
+    print(sep.join(header))
+
+    for trial in trials:
+        idx = trial["index"]
+        exp_name = trial.get("experiment_name", "")
+        params = trial["params"]
+        trial_results = results.get(idx, {})
+
+        row = [str(idx), exp_name]
+        for p in param_names:
+            v = params.get(p, "")
+            if isinstance(v, float):
+                row.append(f"{v:.6g}")
+            else:
+                row.append(str(v))
+        for m in metric_names:
+            v = trial_results.get(m, "")
+            if isinstance(v, float):
+                row.append(f"{v:.6g}")
+            else:
+                row.append(str(v))
+
+        print(sep.join(row))
+
+    return 0
 
 
 def cmd_clean(args):
@@ -397,6 +455,10 @@ def main():
     p_tail.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show (default: 20)")
     p_tail.add_argument("--stderr", action="store_true", help="Show stderr log instead of stdout")
 
+    # results
+    p_results = subparsers.add_parser("results", help="Print TSV of trial parameters and logged metrics")
+    p_results.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
+
     # clean
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
     p_clean.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
@@ -422,6 +484,7 @@ def main():
         "test": cmd_test,
         "monitor": cmd_monitor,
         "tail": cmd_tail,
+        "results": cmd_results,
         "clean": cmd_clean,
         "resolve-overrides": cmd_resolve_overrides,
         "resolve-name": cmd_resolve_name,

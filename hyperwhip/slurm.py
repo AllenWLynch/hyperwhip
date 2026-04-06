@@ -47,6 +47,7 @@ def generate_sbatch_script(config: Config, indices: List[int]) -> str:
     lines.extend([
         "",
         "# Export HyperWhip environment variables",
+        f'export HYPERWHIP_WORKSPACE="{config.workspace}"',
         "export HYPERWHIP_TRIAL_ID=\"$SLURM_ARRAY_TASK_ID\"",
         f'export HYPERWHIP_EXPERIMENT_NAME=$(python -m hyperwhip resolve-name '
         f'"{ws}/{manifest.MANIFEST_FILE}" "$SLURM_ARRAY_TASK_ID")',
