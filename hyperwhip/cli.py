@@ -1,12 +1,11 @@
 """HyperWhip CLI: launch, monitor, and clean SLURM hyperparameter job arrays."""
 
 import argparse
-import json
 import os
 import shutil
 import sys
 
-from hyperwhip.config import ConfigError, load_config
+from hyperwhip.config import load_config
 from hyperwhip.constraints import apply_constraints
 from hyperwhip.display import print_dry_run, print_status_table, print_summary
 from hyperwhip.init import scaffold
@@ -74,6 +73,7 @@ def cmd_launch(args):
     # Submit
     print(f"Submitting {len(pending)} trials as SLURM job array...")
     job_id = slurm.submit_job(config, script, dry_run=False)
+    assert job_id is not None
     print(f"Submitted job array: {job_id}")
 
     # Record submission and update statuses
@@ -403,7 +403,7 @@ def _sync_slurm_status(workspace: str):
     }
 
     updates = {}
-    for (jid, array_idx), slurm_state in statuses.items():
+    for (_, array_idx), slurm_state in statuses.items():
         our_status = state_map.get(slurm_state, slurm_state.lower())
         updates[array_idx] = our_status
 
@@ -480,11 +480,11 @@ def main():
 
     handlers = {
         "init": cmd_init,
-        "launch": cmd_launch,
+        "run": cmd_launch,
         "test": cmd_test,
-        "monitor": cmd_monitor,
+        "status": cmd_monitor,
         "tail": cmd_tail,
-        "results": cmd_results,
+        "res": cmd_results,
         "clean": cmd_clean,
         "resolve-overrides": cmd_resolve_overrides,
         "resolve-name": cmd_resolve_name,

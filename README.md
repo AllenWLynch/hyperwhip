@@ -22,15 +22,16 @@ pip install git+<repo-url>
 ### Verify installation
 
 ```bash
-hyperwhip --help
+whip --help
 ```
 
-This should print the available subcommands: `init`, `launch`, `monitor`, `clean`.
+This should print the available subcommands: `init`, `run`, `test`, `status`, `tail`, `res`, `clean`.
 
 ### Dependencies
 
 - Python >= 3.8
 - [PyYAML](https://pyyaml.org/) (installed automatically)
+- [Pydantic](https://docs.pydantic.dev/) >= 2.0 (installed automatically)
 - A SLURM cluster with `sbatch`, `sacct`, `squeue`, and `scancel` available on the submission host
 
 ## Quick Start
@@ -38,45 +39,66 @@ This should print the available subcommands: `init`, `launch`, `monitor`, `clean
 ### 1. Scaffold a new experiment
 
 ```bash
-hyperwhip init my_experiment --partition gpu --gres gpu:1
+whip init my_experiment --partition gpu --gres gpu:1
 ```
 
 This creates `my_experiment/hyperwhip.yaml` and `my_experiment/launch.sh` with sensible defaults. Edit both files to match your setup:
 
-- **hyperwhip.yaml** — define your parameters, search mode, SLURM resources, and constraints
+- **hyperwhip.yaml** — define your parameters, grid mode, SLURM resources, and constraints
 - **launch.sh** — set up your container, conda environment, or module loads
 
-### 2. Preview and launch
+### 2. Validate and preview
 
 ```bash
-# Preview first (runs preflight checks + prints trial list):
-hyperwhip launch my_experiment/hyperwhip.yaml --dry-run
+# Validate Hydra config for trial 0 (runs locally via launcher with --cfg job):
+whip test my_experiment
 
-# Submit:
-hyperwhip launch my_experiment/hyperwhip.yaml
+# Preview the full sweep (no SLURM interaction, runs preflight checks):
+whip run my_experiment --dry-run
 ```
 
-Preflight checks run automatically before every launch and dry-run. They verify your launcher script exists and is executable, the workspace is writable, parameter definitions are valid, constraint references match defined parameters, and (if on a SLURM node) the partition exists.
-
-### 3. Monitor
+### 3. Launch
 
 ```bash
-hyperwhip monitor my_experiment/hyperwhip.yaml
+whip run my_experiment
 ```
 
-### 4. Resubmit failures
+### 4. Monitor
 
 ```bash
-# Re-running launch only resubmits pending/failed trials:
-hyperwhip launch my_experiment/hyperwhip.yaml
+whip status my_experiment
 ```
 
-### 5. Clean up
+### 5. Resubmit failures
 
 ```bash
-hyperwhip clean my_experiment/hyperwhip.yaml --all
+# Re-running only resubmits pending/failed trials:
+whip run my_experiment
+```
+
+### 6. Collect results
+
+Log metrics from your training script:
+
+```python
+from hyperwhip import log_result
+
+log_result("test_accuracy", 0.95)
+log_result("final_loss", 0.12)
+```
+
+Then print a TSV summary:
+
+```bash
+whip res my_experiment
+```
+
+### 7. Clean up
+
+```bash
+whip clean my_experiment --all
 ```
 
 ## Documentation
 
-See [docs/configuration.md](docs/configuration.md) for the full configuration reference, launcher script examples, constraint system, and search mode details.
+See [docs/configuration.md](docs/configuration.md) for the full configuration reference, launcher script examples, constraint system, search mode details, and result logging API.
