@@ -109,7 +109,7 @@ def cmd_monitor(args):
 
 
 def cmd_tail(args):
-    """Print the last N lines of a trial's log file."""
+    """Print the last N lines of a trial's log files (stdout and stderr)."""
     config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
@@ -118,39 +118,48 @@ def cmd_tail(args):
 
     index = args.index
     lines = args.lines
-    stderr = args.stderr
+    log_dir = manifest.logs_path(config.workspace)
 
-    ext = "err" if stderr else "out"
-    log_file = os.path.join(manifest.logs_path(config.workspace), f"{index}.{ext}")
+    out_file = os.path.join(log_dir, f"{index}.out")
+    err_file = os.path.join(log_dir, f"{index}.err")
 
-    if not os.path.isfile(log_file):
-        print(f"Log file not found: {log_file}", file=sys.stderr)
+    has_out = os.path.isfile(out_file)
+    has_err = os.path.isfile(err_file)
+
+    if not has_out and not has_err:
+        print(f"No log files found for trial {index}", file=sys.stderr)
         return 1
 
-    try:
-        with open(log_file, "r") as f:
-            all_lines = f.readlines()
-    except (OSError, UnicodeDecodeError) as e:
-        print(f"Could not read log file: {e}", file=sys.stderr)
-        return 1
+    _DIM = "\033[2m"
+    _RESET = "\033[0m"
 
-    tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
     # Print trial info header
     trials = manifest.load_manifest(config.workspace)
     for t in trials:
         if t["index"] == index:
             exp_name = t.get("experiment_name", "")
             status = t.get("status", "unknown")
-            print(f"Trial {index} [{status}] {exp_name}")
-            print(f"Log: {log_file} (last {len(tail)} lines)")
-            print("-" * 60)
+            print(f"{_DIM}Trial {index} [{status}] {exp_name}{_RESET}")
+            print(f"{_DIM}{'-' * 60}{_RESET}")
             break
 
-    for line in tail:
-        print(line, end="")
-
-    if tail and not tail[-1].endswith("\n"):
-        print()
+    for log_file, label in [(out_file, "stdout"), (err_file, "stderr")]:
+        if not os.path.isfile(log_file):
+            continue
+        try:
+            with open(log_file, "r") as f:
+                all_lines = f.readlines()
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"Could not read {label} log: {e}", file=sys.stderr)
+            continue
+        if not all_lines:
+            continue
+        tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        print(f"\n{_DIM}[{label}] {log_file} (last {len(tail)} lines){_RESET}")
+        for line in tail:
+            print(line, end="")
+        if tail and not tail[-1].endswith("\n"):
+            print()
 
     return 0
 
@@ -433,7 +442,7 @@ def main():
 
     # launch
     p_launch = subparsers.add_parser("run", help="Submit a hyperparameter sweep")
-    p_launch.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
+    p_launch.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_launch.add_argument(
         "--dry-run", action="store_true",
         help="Print the sbatch script and trial list without submitting"
@@ -441,27 +450,26 @@ def main():
 
     # monitor
     p_monitor = subparsers.add_parser("status", help="Show status of all trials")
-    p_monitor.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
+    p_monitor.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
 
     # test
     p_test = subparsers.add_parser("test", help="Validate Hydra config by running a trial with --cfg job")
-    p_test.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
+    p_test.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_test.add_argument("index", nargs="?", type=int, default=0, help="Trial index to test (default: 0)")
 
     # tail
     p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log")
-    p_tail.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
     p_tail.add_argument("index", type=int, help="Trial index to tail")
+    p_tail.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_tail.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show (default: 20)")
-    p_tail.add_argument("--stderr", action="store_true", help="Show stderr log instead of stdout")
 
     # results
     p_results = subparsers.add_parser("res", help="Print TSV of trial parameters and logged metrics")
-    p_results.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
+    p_results.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
 
     # clean
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
-    p_clean.add_argument("workspace", help="Workspace directory (contains hyperwhip.yaml)")
+    p_clean.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_clean.add_argument("--logs", action="store_true", help="Remove log files")
     p_clean.add_argument("--all", action="store_true", help="Remove entire .hyperwhip state")
 

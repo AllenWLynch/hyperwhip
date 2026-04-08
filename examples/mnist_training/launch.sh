@@ -14,6 +14,7 @@ echo ""
 
 # Option A: Direct execution (if pytorch-lightning is in your PATH)
 cd "$(dirname "$0")"
+
 python train.py $OVERRIDES
 
 # Option B: Conda environment

@@ -3,18 +3,17 @@ name: mnist_sweep
 grid: [learning_rate, optimizer]
 
 slurm:
-  partition: gpu
+  partition: park
   time: "01:00:00"
-  mem: "16G"
-  cpus_per_task: 4
-  gres: "gpu:1"
+  mem: "4G"
+  cpus_per_task: 1
 
 launcher: ./launch.sh
 
 hydra:
   static_overrides:
     - "max_epochs=10"
-    - "data_dir=/scratch/$USER/mnist"
+    - "data_dir=./data/mnist"
     - "accelerator=auto"
 
 parameters:
