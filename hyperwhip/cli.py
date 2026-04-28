@@ -57,10 +57,10 @@ def cmd_launch(args):
             print(f"  {len(pending)} trials need (re)submission.")
             trials = existing
         else:
-            trials = manifest.create_manifest(config.workspace, combinations, abbrevs)
+            trials = manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
             pending = [t["index"] for t in trials]
     else:
-        trials = manifest.create_manifest(config.workspace, combinations, abbrevs)
+        trials = manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
         pending = [t["index"] for t in trials]
 
     # Generate sbatch script
@@ -189,7 +189,7 @@ def cmd_test(args):
 
     if not manifest.workspace_exists(config.workspace):
         abbrevs = config.abbrevs
-        manifest.create_manifest(config.workspace, combinations, abbrevs)
+        manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
 
     trials = manifest.load_manifest(config.workspace)
 

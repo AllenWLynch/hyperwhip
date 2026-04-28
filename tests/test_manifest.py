@@ -148,6 +148,13 @@ class TestExperimentName(unittest.TestCase):
             overrides.index("data.root=/x"),
         )
 
+    def test_experiment_name_uses_labels(self):
+        params = {"pretrained": "/scratch/ckpts/a.ckpt", "lr": 0.001}
+        abbrevs = {"pretrained": "pre", "lr": "lr"}
+        labels = {"pretrained": {"/scratch/ckpts/a.ckpt": "a"}}
+        name = manifest.build_experiment_name(params, abbrevs, labels)
+        self.assertEqual(name, "pre-a_lr-0.001")
+
     def test_manifest_persists_extras(self):
         from hyperwhip.constraints import Trial
         manifest.init_workspace(self.tmpdir)
@@ -156,6 +163,79 @@ class TestExperimentName(unittest.TestCase):
 
         loaded = manifest.load_manifest(self.tmpdir)
         self.assertEqual(loaded[0]["extras"], {"scheduler.warmup": 1000})
+
+
+class TestDiscreteLabels(unittest.TestCase):
+    def test_slash_value_without_labels_rejected(self):
+        from hyperwhip.config import DiscreteParameter
+        with self.assertRaises(Exception):
+            DiscreteParameter(
+                type="discrete",
+                abbrev="m",
+                values=["/scratch/a.ckpt", "/scratch/b.ckpt"],
+            )
+
+    def test_slash_value_with_labels_accepted(self):
+        from hyperwhip.config import DiscreteParameter
+        p = DiscreteParameter(
+            type="discrete",
+            abbrev="m",
+            values=["/scratch/a.ckpt", "/scratch/b.ckpt"],
+            labels=["a", "b"],
+        )
+        self.assertEqual(p.label_for("/scratch/a.ckpt"), "a")
+
+    def test_label_with_slash_rejected(self):
+        from hyperwhip.config import DiscreteParameter
+        with self.assertRaises(Exception):
+            DiscreteParameter(
+                type="discrete",
+                abbrev="m",
+                values=["a", "b"],
+                labels=["x/y", "z"],
+            )
+
+    def test_labels_length_mismatch_rejected(self):
+        from hyperwhip.config import DiscreteParameter
+        with self.assertRaises(Exception):
+            DiscreteParameter(
+                type="discrete",
+                abbrev="m",
+                values=["a", "b", "c"],
+                labels=["x", "y"],
+            )
+
+    def test_duplicate_labels_rejected(self):
+        from hyperwhip.config import DiscreteParameter
+        with self.assertRaises(Exception):
+            DiscreteParameter(
+                type="discrete",
+                abbrev="m",
+                values=["a", "b"],
+                labels=["x", "x"],
+            )
+
+    def test_config_labels_property_exposes_mapping(self):
+        from hyperwhip.config import Config
+        cfg = Config.model_validate({
+            "name": "t",
+            "workspace": "/tmp",
+            "parameters": {
+                "ckpt": {
+                    "type": "discrete",
+                    "abbrev": "c",
+                    "values": ["/p/a", "/p/b"],
+                    "labels": ["a", "b"],
+                },
+                "lr": {
+                    "type": "discrete",
+                    "abbrev": "lr",
+                    "values": [0.1, 0.01],
+                },
+            },
+            "grid": "all",
+        })
+        self.assertEqual(cfg.labels, {"ckpt": {"/p/a": "a", "/p/b": "b"}})
 
 
 class TestWorkspaceExists(unittest.TestCase):

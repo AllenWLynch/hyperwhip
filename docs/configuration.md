@@ -168,6 +168,7 @@ Every parameter requires:
 | `type`    | string    | **yes**  | Must be `"discrete"`. |
 | `abbrev`  | string    | **yes**  | Short name for experiment naming. |
 | `values`  | list[any] | **yes**  | List of values to sweep over. Can be strings, integers, floats, or booleans. |
+| `labels`  | list[string] | no    | Per-value short display tokens used in the experiment name. Must be the same length as `values` and contain unique non-empty strings without `/`. **Required** when any value contains `/` (e.g. file paths). |
 | `default` | any       | no*      | Default value. Must be one of `values`. Required when not in grid. |
 
 ```yaml
@@ -182,7 +183,16 @@ parameters:
     type: discrete
     values: [2, 4, 8]
     default: 4
+  # Path-like values must declare labels so experiment names stay short.
+  pretrained:
+    abbrev: pre
+    type: discrete
+    values: ["/scratch/ckpts/resnet50.ckpt", "/scratch/ckpts/vit_base.ckpt"]
+    labels: [resnet50, vit_base]
+    default: "/scratch/ckpts/resnet50.ckpt"
 ```
+
+The full value is still passed to Hydra as the override; `labels` only affect the auto-generated `experiment_name`.
 
 #### Continuous parameters
 

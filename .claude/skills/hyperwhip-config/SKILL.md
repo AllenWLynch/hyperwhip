@@ -29,6 +29,7 @@ The full reference lives at `docs/configuration.md` in this repo. **Read it befo
    - Provide an `abbrev` (short, distinct — used in experiment names like `lr-0.001_opt-adam`)
    - For log-scale continuous, **`low` must be > 0**
    - If not in the grid (per rule 1), include a `default`
+   - If a discrete value contains `/` (file paths, urls), provide a parallel `labels:` list (same length as `values`) with short, unique display tokens. The full value is still passed to Hydra; only the experiment name uses the label.
 3. **Conditions** (formerly `constraints`, both keys still parse):
    - Need to filter out illegal combinations? Use `exclude`
    - Need to pin a parameter when another is set? Use `force`
@@ -229,6 +230,7 @@ python train.py $OVERRIDES
 ## Pitfalls
 
 - **`abbrev` collisions** silently produce ambiguous experiment names. Keep them distinct.
+- **Discrete values containing `/`** (paths, URLs) are rejected unless `labels:` is provided. Labels themselves may not contain `/` and must be unique.
 - **Log scale with `low: 0`** is rejected — log requires `low > 0`.
 - **Continuous `default` outside `[low, high]`** is rejected at parse time.
 - **Discrete `default` not in `values`** is rejected at parse time.

@@ -11,6 +11,7 @@ class DiscreteParameter(BaseModel):
     type: Literal["discrete"]
     abbrev: str
     values: List[Any] = Field(min_length=1)
+    labels: Optional[List[str]] = None
     default: Optional[Any] = None
 
     @model_validator(mode="after")
@@ -20,6 +21,42 @@ class DiscreteParameter(BaseModel):
                 f"default '{self.default}' is not in values: {self.values}"
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_labels(self):
+        if self.labels is None:
+            # Slashes in values would produce ugly / unsafe experiment names.
+            # Require labels so the user picks a clean display token.
+            for v in self.values:
+                if isinstance(v, str) and "/" in v:
+                    raise ValueError(
+                        f"value {v!r} contains '/'; provide a `labels:` list "
+                        f"so experiment names use a short display token "
+                        f"instead of the raw value"
+                    )
+            return self
+        if len(self.labels) != len(self.values):
+            raise ValueError(
+                f"labels has {len(self.labels)} entries but values has "
+                f"{len(self.values)}; they must match 1-to-1"
+            )
+        for label in self.labels:
+            if not isinstance(label, str) or not label:
+                raise ValueError(f"labels must be non-empty strings, got: {label!r}")
+            if "/" in label:
+                raise ValueError(f"labels may not contain '/', got: {label!r}")
+        if len(set(self.labels)) != len(self.labels):
+            raise ValueError(f"labels must be unique, got: {self.labels}")
+        return self
+
+    def label_for(self, value: Any) -> Optional[str]:
+        """Return the user-provided display label for a value, if labels are set."""
+        if self.labels is None:
+            return None
+        for v, label in zip(self.values, self.labels):
+            if v == value:
+                return label
+        return None
 
 
 class ContinuousParameter(BaseModel):
@@ -209,6 +246,20 @@ class Config(BaseModel):
     @property
     def abbrevs(self) -> Dict[str, str]:
         return {name: spec.abbrev for name, spec in self.parameters.items()}
+
+    @property
+    def labels(self) -> Dict[str, Dict[Any, str]]:
+        """Per-parameter value→label mappings for experiment naming.
+
+        Only includes discrete parameters that declared `labels:`. Parameters
+        without explicit labels are absent (not an empty dict) so the name
+        builder falls back to stringifying the raw value.
+        """
+        result: Dict[str, Dict[Any, str]] = {}
+        for name, spec in self.parameters.items():
+            if isinstance(spec, DiscreteParameter) and spec.labels is not None:
+                result[name] = dict(zip(spec.values, spec.labels))
+        return result
 
     @property
     def defaults(self) -> Optional[Dict[str, Any]]:

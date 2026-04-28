@@ -49,12 +49,22 @@ def workspace_exists(base: str) -> bool:
 # --- Manifest operations ---
 
 def build_experiment_name(
-    params: Dict[str, Any], abbrevs: Dict[str, str]
+    params: Dict[str, Any],
+    abbrevs: Dict[str, str],
+    labels: Optional[Dict[str, Dict[Any, str]]] = None,
 ) -> str:
     """Construct a deterministic experiment name from parameter abbreviations and values.
 
     Uses '-' as key-value separator (not '=') to avoid conflicts with Hydra's
     override syntax when experiment_name is passed as an override.
+
+    `labels`, if provided, maps parameter_name -> {value: display_label}. When
+    a value has a registered label, the label is used in place of the raw
+    value (useful for paths or other long discrete values).
+
+    Slashes in raw values would produce unsafe experiment names; the config
+    validator rejects discrete values containing '/' unless an explicit
+    `labels:` list is provided (and labels themselves may not contain '/').
 
     Example: with abbrevs={"learning_rate": "lr", "optimizer": "opt"} and
     params={"learning_rate": 0.001, "optimizer": "adam"},
@@ -63,10 +73,16 @@ def build_experiment_name(
     parts = []
     for param_name, value in params.items():
         abbr = abbrevs.get(param_name, param_name)
-        if isinstance(value, float):
-            parts.append(f"{abbr}-{value:.4g}")
+        label = None
+        if labels is not None:
+            label = labels.get(param_name, {}).get(value)
+        if label is not None:
+            token = label
+        elif isinstance(value, float):
+            token = f"{value:.4g}"
         else:
-            parts.append(f"{abbr}-{value}")
+            token = str(value)
+        parts.append(f"{abbr}-{token}")
     return "_".join(parts)
 
 
@@ -74,6 +90,7 @@ def create_manifest(
     base: str,
     trials: List[Union[Trial, Dict[str, Any]]],
     abbrevs: Optional[Dict[str, str]] = None,
+    labels: Optional[Dict[str, Dict[Any, str]]] = None,
 ) -> List[dict]:
     """Create a new manifest from a list of Trials (or bare param dicts).
 
@@ -94,7 +111,7 @@ def create_manifest(
             "index": i,
             "params": params,
             "extras": extras,
-            "experiment_name": build_experiment_name(params, abbrevs),
+            "experiment_name": build_experiment_name(params, abbrevs, labels),
             "status": "pending",
         })
     _write_manifest(base, records)
