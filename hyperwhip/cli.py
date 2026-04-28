@@ -51,10 +51,11 @@ def cmd_launch(args):
             # Refresh status from SLURM before deciding what to resubmit
             _sync_slurm_status(config.workspace)
             pending = manifest.get_pending_indices(config.workspace)
-            if not pending:
+            if not pending and not args.indices:
                 print("All trials are completed or currently running. Nothing to submit.")
                 return 0
-            print(f"  {len(pending)} trials need (re)submission.")
+            if not args.indices:
+                print(f"  {len(pending)} trials need (re)submission.")
             trials = existing
         else:
             trials = manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
@@ -62,6 +63,38 @@ def cmd_launch(args):
     else:
         trials = manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
         pending = [t["index"] for t in trials]
+
+    # Narrow to a user-specified subset of indices, if given.
+    if args.indices:
+        try:
+            requested = sorted(set(slurm._parse_array_range(args.indices)))
+        except ValueError as e:
+            print(f"Invalid --indices spec {args.indices!r}: {e}", file=sys.stderr)
+            return 1
+        valid = {t["index"] for t in trials}
+        unknown = [i for i in requested if i not in valid]
+        if unknown:
+            print(
+                f"Indices out of range: {unknown} (valid: 0-{max(valid)})",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.force:
+            status_by_idx = {t["index"]: t["status"] for t in trials}
+            blocked = [
+                i for i in requested
+                if status_by_idx[i] in ("running", "queued", "submitted", "completed")
+            ]
+            if blocked:
+                rows = ", ".join(f"{i}={status_by_idx[i]}" for i in blocked)
+                print(
+                    f"Refusing to resubmit indices already running/completed: {rows}.\n"
+                    f"Pass --force to override, or `whip clean` to reset.",
+                    file=sys.stderr,
+                )
+                return 1
+        pending = requested
+        print(f"  Submitting {len(pending)} requested trial(s): {args.indices}")
 
     # Generate sbatch script
     script = slurm.generate_sbatch_script(config, pending, args.max_concurrent)
@@ -532,6 +565,14 @@ def main():
     p_launch.add_argument(
         "-j", "--max-concurrent", type=int, default=None,
         help="Cap concurrent running array tasks (overrides slurm.max_concurrent)"
+    )
+    p_launch.add_argument(
+        "-i", "--indices", default=None,
+        help="Submit only these trial indices (SLURM-style spec, e.g. '0-3,5,7-9')"
+    )
+    p_launch.add_argument(
+        "-f", "--force", action="store_true",
+        help="With --indices: resubmit even if a requested trial is already running or completed"
     )
 
     # monitor
