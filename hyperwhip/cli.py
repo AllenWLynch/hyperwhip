@@ -5,7 +5,7 @@ import os
 import shutil
 import sys
 
-from hyperwhip.config import load_config
+from hyperwhip.config import ConfigError, load_config
 from hyperwhip.constraints import apply_constraints
 from hyperwhip.display import print_dry_run, print_status_table, print_summary
 from hyperwhip.init import scaffold
@@ -631,7 +631,16 @@ def main():
         "resolve-name": cmd_resolve_name,
     }
 
-    rc = handlers[args.command](args)
+    try:
+        rc = handlers[args.command](args)
+    except (ConfigError, PreflightError, FileNotFoundError, FileExistsError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        if os.environ.get("HYPERWHIP_DEBUG"):
+            raise
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)
     sys.exit(rc or 0)
 
 
