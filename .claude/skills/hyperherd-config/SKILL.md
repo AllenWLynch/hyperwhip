@@ -1,21 +1,21 @@
 ---
-description: Author or edit a HyperWhip sweep configuration (hyperwhip.yaml) and its companion launch.sh. Use when the user is creating, editing, or debugging a hyperwhip.yaml file, scaffolding a sweep workspace, designing parameter conditions, or asking how to express a particular sweep shape (full grid, partial grid, one-at-a-time, conditional overrides).
+description: Author or edit a HyperHerd sweep configuration (hyperherd.yaml) and its companion launch.sh. Use when the user is creating, editing, or debugging a hyperherd.yaml file, scaffolding a sweep workspace, designing parameter conditions, or asking how to express a particular sweep shape (full grid, partial grid, one-at-a-time, conditional overrides).
 ---
 
-# HyperWhip Configuration
+# HyperHerd Configuration
 
-HyperWhip runs SLURM hyperparameter sweeps from two files in a workspace directory:
+HyperHerd runs SLURM hyperparameter sweeps from two files in a workspace directory:
 
-- `hyperwhip.yaml` — declarative sweep config (parameters, grid mode, SLURM resources, conditions, static Hydra overrides)
+- `hyperherd.yaml` — declarative sweep config (parameters, grid mode, SLURM resources, conditions, static Hydra overrides)
 - `launch.sh` — bash script that receives a Hydra override string as `$1` and runs the training command
 
 The full reference lives at `docs/configuration.md` in this repo. **Read it before writing a non-trivial config** — this skill is a checklist and a set of patterns, not a substitute for the doc.
 
 ## When to use this skill
 
-- Creating a new `hyperwhip.yaml` from scratch
+- Creating a new `hyperherd.yaml` from scratch
 - Editing an existing one (adding parameters, changing grid mode, adding/refactoring conditions)
-- Debugging Pydantic validation errors from `whip run` / `whip test`
+- Debugging Pydantic validation errors from `herd run` / `herd test`
 - Designing the launcher script
 
 ## Checklist before writing
@@ -77,25 +77,25 @@ If the value should depend on a swept parameter, use a condition with `set:` ins
 
 ## Environment variables in the launcher
 
-HyperWhip exports three environment variables before invoking `launch.sh`. Use them inside the launcher (or pass them through to the training script) to give every trial a stable identity.
+HyperHerd exports three environment variables before invoking `launch.sh`. Use them inside the launcher (or pass them through to the training script) to give every trial a stable identity.
 
 | Variable | Value | Typical use |
 |----------|-------|-------------|
-| `HYPERWHIP_WORKSPACE` | absolute path to the workspace directory | resolving paths under `.hyperwhip/`, locating the manifest |
-| `HYPERWHIP_TRIAL_ID` | the SLURM array task index (same as `$SLURM_ARRAY_TASK_ID`) | per-trial output subdir, `log_result()` keying |
-| `HYPERWHIP_EXPERIMENT_NAME` | the auto-generated name (e.g. `lr-0.001_opt-adam_bs-64`) | wandb run name, output directory, checkpoint path |
+| `HYPERHERD_WORKSPACE` | absolute path to the workspace directory | resolving paths under `.hyperherd/`, locating the manifest |
+| `HYPERHERD_TRIAL_ID` | the SLURM array task index (same as `$SLURM_ARRAY_TASK_ID`) | per-trial output subdir, `log_result()` keying |
+| `HYPERHERD_EXPERIMENT_NAME` | the auto-generated name (e.g. `lr-0.001_opt-adam_bs-64`) | wandb run name, output directory, checkpoint path |
 
 The training code can read these directly:
 
 ```python
 import os
-exp_name = os.environ["HYPERWHIP_EXPERIMENT_NAME"]
+exp_name = os.environ["HYPERHERD_EXPERIMENT_NAME"]
 output_dir = f"./outputs/{exp_name}"          # idempotent, stable across resubmissions
 ```
 
 Or pass them through Hydra by referencing them in `static_overrides` (Hydra resolves `${env:VAR}` if you have OmegaConf env-var resolution enabled), but reading them directly in Python is usually simpler.
 
-**Idempotency reminder:** because `whip run` resubmits failed/cancelled trials with the same array indices and parameters, your training script must use a *deterministic* output path (driven by `HYPERWHIP_EXPERIMENT_NAME` or `HYPERWHIP_TRIAL_ID`) and resume from checkpoint on startup.
+**Idempotency reminder:** because `herd run` resubmits failed/cancelled trials with the same array indices and parameters, your training script must use a *deterministic* output path (driven by `HYPERHERD_EXPERIMENT_NAME` or `HYPERHERD_TRIAL_ID`) and resume from checkpoint on startup.
 
 ## Common patterns
 
@@ -236,31 +236,31 @@ python train.py $OVERRIDES
 - **Discrete `default` not in `values`** is rejected at parse time.
 - **`exclude` / `force` referencing an unknown parameter** is rejected at parse time. (`set` keys are *not* validated — they're free-form Hydra paths.)
 - **Trial dedup on params only** — if a `force` collapses two combos to the same params, they merge. Extras (`set`) are deterministic from params, so they don't break this.
-- **Idempotent training is required** for `whip run` resubmission to work. Use `$HYPERWHIP_EXPERIMENT_NAME` for a stable output dir and resume from checkpoint on startup.
-- **Launcher path** in `hyperwhip.yaml` is resolved relative to the config file's directory, not the cwd.
+- **Idempotent training is required** for `herd run` resubmission to work. Use `$HYPERHERD_EXPERIMENT_NAME` for a stable output dir and resume from checkpoint on startup.
+- **Launcher path** in `hyperherd.yaml` is resolved relative to the config file's directory, not the cwd.
 
 ## Throttling concurrent jobs
 
-Set `slurm.max_concurrent: N` to cap simultaneously running array tasks. HyperWhip appends `%N` to the SLURM array spec (e.g. `--array=0-49%5`). Use this when:
+Set `slurm.max_concurrent: N` to cap simultaneously running array tasks. HyperHerd appends `%N` to the SLURM array spec (e.g. `--array=0-49%5`). Use this when:
 
 - The cluster has a per-user concurrent-job limit
 - You want to avoid hammering a shared filesystem
 - You're sanity-checking a sweep — start with `max_concurrent: 1` to serialize
 
-Override per invocation with `whip run --max-concurrent N` (CLI wins over the config value).
+Override per invocation with `herd run --max-concurrent N` (CLI wins over the config value).
 
 ## Workflow
 
 After writing or editing the config, suggest the user run:
 
 ```bash
-whip run <workspace> --dry-run    # validate config, preview trials & sbatch script
-whip test <workspace>             # run trial 0 with --cfg job (Hydra config validation only)
-whip local <workspace>            # run trial 0 end-to-end locally — full pre-flight, no SLURM
-whip run <workspace>              # actually submit
+herd run <workspace> --dry-run    # validate config, preview trials & sbatch script
+herd test <workspace>             # run trial 0 with --cfg job (Hydra config validation only)
+herd local <workspace>            # run trial 0 end-to-end locally — full pre-flight, no SLURM
+herd run <workspace>              # actually submit
 ```
 
-`whip local` runs the launcher exactly like SLURM would, with `HYPERWHIP_*` env vars set. It refuses any index that has ever been submitted to SLURM (would clobber outputs).
+`herd local` runs the launcher exactly like SLURM would, with `HYPERHERD_*` env vars set. It refuses any index that has ever been submitted to SLURM (would clobber outputs).
 
 ## Authoring discipline
 

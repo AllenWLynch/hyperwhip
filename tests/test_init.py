@@ -6,7 +6,7 @@ import stat
 import tempfile
 import unittest
 
-from hyperwhip.init import scaffold
+from hyperherd.init import scaffold
 
 
 class TestScaffold(unittest.TestCase):
@@ -20,24 +20,24 @@ class TestScaffold(unittest.TestCase):
         config_path, launcher_path = scaffold(self.tmpdir, name="test_exp")
         self.assertTrue(os.path.isfile(config_path))
         self.assertTrue(os.path.isfile(launcher_path))
-        self.assertTrue(config_path.endswith("hyperwhip.yaml"))
+        self.assertTrue(config_path.endswith("hyperherd.yaml"))
         self.assertTrue(launcher_path.endswith("launch.sh"))
 
     def test_config_contains_name(self):
         scaffold(self.tmpdir, name="my_sweep")
-        with open(os.path.join(self.tmpdir, "hyperwhip.yaml")) as f:
+        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
             content = f.read()
         self.assertIn("name: my_sweep", content)
 
     def test_config_contains_grid(self):
         scaffold(self.tmpdir, name="test", grid="all")
-        with open(os.path.join(self.tmpdir, "hyperwhip.yaml")) as f:
+        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
             content = f.read()
         self.assertIn("grid: all", content)
 
     def test_config_contains_gres(self):
         scaffold(self.tmpdir, name="test", gres="gpu:1")
-        with open(os.path.join(self.tmpdir, "hyperwhip.yaml")) as f:
+        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
             content = f.read()
         self.assertIn('gres: "gpu:1"', content)
 
@@ -60,7 +60,7 @@ class TestScaffold(unittest.TestCase):
     def test_force_overwrites(self):
         scaffold(self.tmpdir, name="test")
         scaffold(self.tmpdir, name="test_v2", overwrite=True)
-        with open(os.path.join(self.tmpdir, "hyperwhip.yaml")) as f:
+        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
             content = f.read()
         self.assertIn("name: test_v2", content)
 
@@ -68,13 +68,13 @@ class TestScaffold(unittest.TestCase):
         subdir = os.path.join(self.tmpdir, "cool_experiment")
         os.makedirs(subdir)
         scaffold(subdir)
-        with open(os.path.join(subdir, "hyperwhip.yaml")) as f:
+        with open(os.path.join(subdir, "hyperherd.yaml")) as f:
             content = f.read()
         self.assertIn("name: cool_experiment", content)
 
     def test_custom_slurm_settings(self):
         scaffold(self.tmpdir, name="test", partition="a100", time="12:00:00", mem="64G", cpus=8)
-        with open(os.path.join(self.tmpdir, "hyperwhip.yaml")) as f:
+        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
             content = f.read()
         self.assertIn("partition: a100", content)
         self.assertIn('time: "12:00:00"', content)

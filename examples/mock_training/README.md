@@ -1,6 +1,6 @@
 # Mock Training Example
 
-A self-contained example that demonstrates HyperWhip's full workflow without a real ML framework or SLURM cluster.
+A self-contained example that demonstrates HyperHerd's full workflow without a real ML framework or SLURM cluster.
 
 ## What it does
 
@@ -26,7 +26,7 @@ pip install hydra-core omegaconf
 cd examples/mock_training
 
 # Preview the sweep:
-hyperwhip launch hyperwhip.yaml --dry-run
+hyperherd launch hyperherd.yaml --dry-run
 
 # You can test a single trial manually:
 python train.py learning_rate=0.001 optimizer=adam batch_size=64 experiment_name=test_run
@@ -41,18 +41,18 @@ python train.py learning_rate=0.001 optimizer=adam batch_size=64 experiment_name
 cd examples/mock_training
 
 # Submit all 12 trials (3 LR x 2 optimizer x 2 batch_size):
-hyperwhip launch hyperwhip.yaml
+hyperherd launch hyperherd.yaml
 
 # Monitor progress:
-hyperwhip monitor hyperwhip.yaml
+hyperherd monitor hyperherd.yaml
 
 # Some trials will fail randomly. Re-launch to resubmit only the failed ones:
-hyperwhip launch hyperwhip.yaml
+hyperherd launch hyperherd.yaml
 
 # Repeat until all trials complete.
 
 # Clean up:
-hyperwhip clean hyperwhip.yaml --all
+hyperherd clean hyperherd.yaml --all
 ```
 
 ## What to observe

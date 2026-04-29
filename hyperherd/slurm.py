@@ -5,8 +5,8 @@ import re
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
-from hyperwhip.config import Config
-from hyperwhip import manifest
+from hyperherd.config import Config
+from hyperherd import manifest
 
 
 def generate_sbatch_script(
@@ -27,7 +27,7 @@ def generate_sbatch_script(
 
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --job-name=hyperwhip_{config.name}",
+        f"#SBATCH --job-name=hyperherd_{config.name}",
         f"#SBATCH --array={array_spec}",
         f"#SBATCH --partition={config.slurm.partition}",
         f"#SBATCH --time={config.slurm.time}",
@@ -54,14 +54,14 @@ def generate_sbatch_script(
 
     lines.extend([
         "",
-        "# Export HyperWhip environment variables",
-        f'export HYPERWHIP_WORKSPACE="{config.workspace}"',
-        "export HYPERWHIP_TRIAL_ID=\"$SLURM_ARRAY_TASK_ID\"",
-        f'export HYPERWHIP_EXPERIMENT_NAME=$(python -m hyperwhip resolve-name '
+        "# Export HyperHerd environment variables",
+        f'export HYPERHERD_WORKSPACE="{config.workspace}"',
+        "export HYPERHERD_TRIAL_ID=\"$SLURM_ARRAY_TASK_ID\"",
+        f'export HYPERHERD_EXPERIMENT_NAME=$(python -m hyperherd resolve-name '
         f'"{ws}/{manifest.MANIFEST_FILE}" "$SLURM_ARRAY_TASK_ID")',
         "",
         "# Resolve Hydra overrides for this array task (includes experiment_name=...)",
-        f'OVERRIDES=$(python -m hyperwhip resolve-overrides "{ws}/{manifest.MANIFEST_FILE}" '
+        f'OVERRIDES=$(python -m hyperherd resolve-overrides "{ws}/{manifest.MANIFEST_FILE}" '
         f'"$SLURM_ARRAY_TASK_ID"{static_flag})',
         "",
         "# Invoke the user's launcher script",

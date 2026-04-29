@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import List
 
-from hyperwhip.config import Config
+from hyperherd.config import Config
 
 
 class PreflightError(Exception):

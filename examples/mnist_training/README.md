@@ -1,23 +1,23 @@
 # MNIST Training Example
 
-A complete example training an MNIST digit classifier using PyTorch Lightning, Hydra, and HyperWhip. Demonstrates idempotent training with checkpoint resume and result logging.
+A complete example training an MNIST digit classifier using PyTorch Lightning, Hydra, and HyperHerd. Demonstrates idempotent training with checkpoint resume and result logging.
 
 ## What it does
 
 `train.py` is a Hydra-configured PyTorch Lightning training script that:
 
 - Trains a simple 3-layer MLP on MNIST (28x28 -> hidden -> hidden -> 10)
-- **Checkpoints deterministically** to `outputs/<experiment_name>/` using the HyperWhip experiment name
+- **Checkpoints deterministically** to `outputs/<experiment_name>/` using the HyperHerd experiment name
 - **Resumes from checkpoint** automatically if `last.ckpt` exists (idempotent)
 - **Tests using the best checkpoint** (by validation accuracy) after training
-- **Logs final metrics** via `hyperwhip.log_result()` for collection with `whip res`
+- **Logs final metrics** via `hyperherd.log_result()` for collection with `herd res`
 - **Supports GPU or CPU** via Lightning's `accelerator=auto`
 
 ## Prerequisites
 
 ```bash
 pip install pytorch-lightning torchvision hydra-core
-pip install -e /path/to/hyperwhip  # for log_result support
+pip install -e /path/to/hyperherd  # for log_result support
 ```
 
 ## Hyperparameters
@@ -48,34 +48,34 @@ python train.py learning_rate=0.001 optimizer=adam batch_size=64 \
     hidden_dim=128 dropout=0.0 experiment_name=test_run max_epochs=3
 ```
 
-## Running with HyperWhip
+## Running with HyperHerd
 
 ```bash
 cd examples/mnist_training
 
 # Validate Hydra config:
-whip test .
+herd test .
 
 # Preview the sweep:
-whip run . --dry-run
+herd run . --dry-run
 
 # Submit to SLURM:
-whip run .
+herd run .
 
 # Monitor progress:
-whip status .
+herd status .
 
 # Tail a trial's log:
-whip tail . 0
+herd tail . 0
 
 # Re-run to resubmit failed trials (they resume from checkpoint):
-whip run .
+herd run .
 
 # Collect results:
-whip res .
+herd res .
 
 # Clean up:
-whip clean . --all
+herd clean . --all
 ```
 
 ## Idempotency
@@ -86,11 +86,11 @@ The training script is idempotent:
 2. **Checkpoint resume**: If `last.ckpt` exists in the output dir, Lightning resumes training from that checkpoint.
 3. **Reproducible splits**: The train/val split uses a fixed seed (`torch.Generator().manual_seed(42)`).
 
-If a trial fails mid-training and HyperWhip resubmits it, training picks up from the last saved epoch.
+If a trial fails mid-training and HyperHerd resubmits it, training picks up from the last saved epoch.
 
 ## Results
 
-After all trials complete, `whip res .` prints:
+After all trials complete, `herd res .` prints:
 
 ```
 trial_id  experiment_name              learning_rate  optimizer  test_acc  test_loss  best_val_acc

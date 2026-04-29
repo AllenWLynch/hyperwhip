@@ -1,13 +1,13 @@
-"""Manage the .hyperwhip/ workspace: trial manifest, status, and job tracking."""
+"""Manage the .hyperherd/ workspace: trial manifest, status, and job tracking."""
 
 import json
 import os
 from typing import Any, Dict, List, Optional, Union
 
-from hyperwhip.constraints import Trial
+from hyperherd.constraints import Trial
 
 
-WORKSPACE_DIR = ".hyperwhip"
+WORKSPACE_DIR = ".hyperherd"
 MANIFEST_FILE = "manifest.json"
 JOB_IDS_FILE = "job_ids.json"
 SBATCH_FILE = "job.sbatch"
@@ -36,7 +36,7 @@ def logs_path(base: str) -> str:
 
 
 def init_workspace(base: str) -> None:
-    """Create the .hyperwhip/ workspace directory structure."""
+    """Create the .hyperherd/ workspace directory structure."""
     ws = workspace_path(base)
     os.makedirs(ws, exist_ok=True)
     os.makedirs(logs_path(base), exist_ok=True)

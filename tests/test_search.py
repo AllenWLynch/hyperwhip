@@ -2,8 +2,8 @@
 
 import unittest
 
-from hyperwhip.config import Config
-from hyperwhip.search import generate_combinations, _get_param_values
+from hyperherd.config import Config
+from hyperherd.search import generate_combinations, _get_param_values
 
 
 def _make_config(parameters, grid=None):

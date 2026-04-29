@@ -1,19 +1,19 @@
-"""HyperWhip CLI: launch, monitor, and clean SLURM hyperparameter job arrays."""
+"""HyperHerd CLI: launch, monitor, and clean SLURM hyperparameter job arrays."""
 
 import argparse
 import os
 import shutil
 import sys
 
-from hyperwhip.config import ConfigError, load_config
-from hyperwhip.constraints import apply_constraints
-from hyperwhip.display import print_dry_run, print_status_table, print_summary
-from hyperwhip.init import scaffold
-from hyperwhip.preflight import PreflightError, run_preflight
-from hyperwhip.search import generate_combinations
-from hyperwhip import manifest
-from hyperwhip import slurm
-from hyperwhip.logging import load_all_results
+from hyperherd.config import ConfigError, load_config
+from hyperherd.constraints import apply_constraints
+from hyperherd.display import print_dry_run, print_status_table, print_summary
+from hyperherd.init import scaffold
+from hyperherd.preflight import PreflightError, run_preflight
+from hyperherd.search import generate_combinations
+from hyperherd import manifest
+from hyperherd import slurm
+from hyperherd.logging import load_all_results
 
 
 def cmd_launch(args):
@@ -89,7 +89,7 @@ def cmd_launch(args):
                 rows = ", ".join(f"{i}={status_by_idx[i]}" for i in blocked)
                 print(
                     f"Refusing to resubmit indices already running/completed: {rows}.\n"
-                    f"Pass --force to override, or `whip clean` to reset.",
+                    f"Pass --force to override, or `herd clean` to reset.",
                     file=sys.stderr,
                 )
                 return 1
@@ -123,7 +123,7 @@ def cmd_monitor(args):
     config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
-        print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
+        print("No workspace found. Run 'hyperherd launch' first.", file=sys.stderr)
         return 1
 
     # Sync status from SLURM
@@ -146,7 +146,7 @@ def cmd_tail(args):
     config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
-        print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
+        print("No workspace found. Run 'hyperherd launch' first.", file=sys.stderr)
         return 1
 
     index = args.index
@@ -251,9 +251,9 @@ def cmd_test(args):
 
     # Set env vars to match what the sbatch script would export
     env = os.environ.copy()
-    env["HYPERWHIP_WORKSPACE"] = config.workspace
-    env["HYPERWHIP_TRIAL_ID"] = str(index)
-    env["HYPERWHIP_EXPERIMENT_NAME"] = exp_name
+    env["HYPERHERD_WORKSPACE"] = config.workspace
+    env["HYPERHERD_TRIAL_ID"] = str(index)
+    env["HYPERHERD_EXPERIMENT_NAME"] = exp_name
 
     result = subprocess.run(
         ["bash", config.launcher, overrides_with_cfg],
@@ -274,7 +274,7 @@ def cmd_test(args):
 def cmd_local(args):
     """Run a single trial end-to-end locally via the launcher (no SLURM, no --cfg job).
 
-    Useful as a final pre-flight before `whip run`. Refuses any index that has
+    Useful as a final pre-flight before `herd run`. Refuses any index that has
     ever been submitted to SLURM, to avoid interfering with a real run's outputs.
     """
     import subprocess
@@ -313,7 +313,7 @@ def cmd_local(args):
                 f"Trial {index} was previously submitted to SLURM "
                 f"(job {record['slurm_job_id']}). Refusing to run locally — "
                 f"running would clobber its outputs/logs. Pick a different index "
-                f"or `whip clean --all` first.",
+                f"or `herd clean --all` first.",
                 file=sys.stderr,
             )
             return 1
@@ -333,9 +333,9 @@ def cmd_local(args):
     print()
 
     env = os.environ.copy()
-    env["HYPERWHIP_WORKSPACE"] = config.workspace
-    env["HYPERWHIP_TRIAL_ID"] = str(index)
-    env["HYPERWHIP_EXPERIMENT_NAME"] = exp_name
+    env["HYPERHERD_WORKSPACE"] = config.workspace
+    env["HYPERHERD_TRIAL_ID"] = str(index)
+    env["HYPERHERD_EXPERIMENT_NAME"] = exp_name
 
     result = subprocess.run(
         ["bash", config.launcher, overrides],
@@ -358,14 +358,14 @@ def cmd_results(args):
     config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
-        print("No workspace found. Run 'hyperwhip launch' first.", file=sys.stderr)
+        print("No workspace found. Run 'hyperherd launch' first.", file=sys.stderr)
         return 1
 
     trials = manifest.load_manifest(config.workspace)
     results = load_all_results(config.workspace)
 
     if not results:
-        print("No results logged yet. Use hyperwhip.log_result() from your training script.", file=sys.stderr)
+        print("No results logged yet. Use hyperherd.log_result() from your training script.", file=sys.stderr)
         return 1
 
     # Collect all metric names across trials
@@ -442,7 +442,7 @@ def cmd_clean(args):
 
 
 def cmd_init(args):
-    """Scaffold a new hyperwhip.yaml and launch.sh."""
+    """Scaffold a new hyperherd.yaml and launch.sh."""
     directory = args.directory or "."
     try:
         config_path, launcher_path = scaffold(
@@ -466,9 +466,9 @@ def cmd_init(args):
     print(f"Created {launcher_path}")
     print()
     print("Next steps:")
-    print("  1. Edit hyperwhip.yaml to define your parameters")
+    print("  1. Edit hyperherd.yaml to define your parameters")
     print("  2. Edit launch.sh to set up your container/environment")
-    print(f"  3. Run: hyperwhip launch {directory} --dry-run")
+    print(f"  3. Run: hyperherd launch {directory} --dry-run")
     return 0
 
 
@@ -478,7 +478,7 @@ def cmd_resolve_overrides(args):
     task_id = int(args.task_id)
 
     # Load manifest directly from the given path
-    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperwhip/../
+    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperherd/../
     static = args.static.split() if args.static else None
     overrides = manifest.resolve_overrides(base, task_id, static)
     print(overrides)
@@ -490,7 +490,7 @@ def cmd_resolve_name(args):
     manifest_file = args.manifest
     task_id = int(args.task_id)
 
-    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperwhip/../
+    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperherd/../
     trials = manifest.load_manifest(base)
     for t in trials:
         if t["index"] == task_id:
@@ -536,7 +536,7 @@ def _sync_slurm_status(workspace: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="hyperwhip",
+        prog="herd",
         description="Launch and monitor hyperparameter optimization job arrays on SLURM.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -551,7 +551,7 @@ def main():
     p_init.add_argument("-m", "--mem", default="8G", help="Memory per node (default: 8G)")
     p_init.add_argument("-c", "--cpus", type=int, default=1, help="CPUs per task (default: 1)")
     p_init.add_argument("--gres", default=None, help="Generic resources (e.g. gpu:1)")
-    p_init.add_argument("--config", default=None, help="Copy this file as hyperwhip.yaml instead of generating a template")
+    p_init.add_argument("--config", default=None, help="Copy this file as hyperherd.yaml instead of generating a template")
     p_init.add_argument("--launcher", default=None, help="Copy this file as launch.sh instead of generating a template")
     p_init.add_argument("-f", "--force", action="store_true", help="Overwrite existing files")
 
@@ -603,7 +603,7 @@ def main():
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
     p_clean.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_clean.add_argument("-l", "--logs", action="store_true", help="Remove log files")
-    p_clean.add_argument("-a", "--all", action="store_true", help="Remove entire .hyperwhip state")
+    p_clean.add_argument("-a", "--all", action="store_true", help="Remove entire .hyperherd state")
 
     # Internal: resolve-overrides (called from within sbatch script)
     p_resolve = subparsers.add_parser("resolve-overrides", help=argparse.SUPPRESS)
@@ -635,7 +635,7 @@ def main():
         rc = handlers[args.command](args)
     except (ConfigError, PreflightError, FileNotFoundError, FileExistsError) as e:
         print(f"Error: {e}", file=sys.stderr)
-        if os.environ.get("HYPERWHIP_DEBUG"):
+        if os.environ.get("HYPERHERD_DEBUG"):
             raise
         sys.exit(1)
     except KeyboardInterrupt:

@@ -5,9 +5,9 @@ set -euo pipefail
 
 OVERRIDES="$1"
 
-echo "=== HyperWhip MNIST Launcher ==="
-echo "  HYPERWHIP_TRIAL_ID:          ${HYPERWHIP_TRIAL_ID:-unset}"
-echo "  HYPERWHIP_EXPERIMENT_NAME:   ${HYPERWHIP_EXPERIMENT_NAME:-unset}"
+echo "=== HyperHerd MNIST Launcher ==="
+echo "  HYPERHERD_TRIAL_ID:          ${HYPERHERD_TRIAL_ID:-unset}"
+echo "  HYPERHERD_EXPERIMENT_NAME:   ${HYPERHERD_EXPERIMENT_NAME:-unset}"
 echo ""
 
 # --- Adapt one of these for your environment ---

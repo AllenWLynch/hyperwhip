@@ -2,8 +2,8 @@
 
 import unittest
 
-from hyperwhip.config import Constraint
-from hyperwhip.constraints import apply_constraints
+from hyperherd.config import Constraint
+from hyperherd.constraints import apply_constraints
 
 
 class TestExcludeConstraint(unittest.TestCase):

@@ -2,8 +2,8 @@
 
 import unittest
 
-from hyperwhip.config import Config
-from hyperwhip.slurm import _indices_to_array_spec, generate_sbatch_script
+from hyperherd.config import Config
+from hyperherd.slurm import _indices_to_array_spec, generate_sbatch_script
 
 
 class TestIndicesToArraySpec(unittest.TestCase):

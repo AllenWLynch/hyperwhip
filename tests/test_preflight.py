@@ -6,8 +6,8 @@ import stat
 import tempfile
 import unittest
 
-from hyperwhip.config import Config
-from hyperwhip.preflight import PreflightError, run_preflight
+from hyperherd.config import Config
+from hyperherd.preflight import PreflightError, run_preflight
 
 
 def _make_config(parameters=None, constraints=None, launcher=None, workspace=None, grid="all"):
@@ -18,7 +18,7 @@ def _make_config(parameters=None, constraints=None, launcher=None, workspace=Non
 
     raw = {
         "name": "test",
-        "workspace": workspace or "/tmp/hyperwhip_preflight_test",
+        "workspace": workspace or "/tmp/hyperherd_preflight_test",
         "parameters": parameters,
         "constraints": constraints,
         "launcher": launcher or "",

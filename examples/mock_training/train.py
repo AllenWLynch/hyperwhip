@@ -1,4 +1,4 @@
-"""Mock training script for testing HyperWhip.
+"""Mock training script for testing HyperHerd.
 
 Simulates a multi-epoch training loop that:
 - Sleeps to simulate computation
@@ -71,7 +71,7 @@ def main(cfg: DictConfig) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     exp_name = cfg.get("experiment_name", "unknown")
-    print(f"[HyperWhip Mock Training]")
+    print(f"[HyperHerd Mock Training]")
     print(f"  experiment_name: {exp_name}")
     print(f"  learning_rate:   {cfg.learning_rate}")
     print(f"  optimizer:       {cfg.optimizer}")

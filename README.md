@@ -1,15 +1,17 @@
-# HyperWhip
+# HyperHerd
 
 Launch and monitor hyperparameter optimization job arrays on SLURM.
 
-HyperWhip takes a YAML configuration file describing your hyperparameter search space and submits it as a SLURM job array. Each array task runs one parameter combination through your training script via [Hydra](https://hydra.cc/) overrides. A user-provided launcher script handles container setup, environment modules, or any other runtime configuration.
+HyperHerd takes a YAML configuration file describing your hyperparameter search space and submits it as a SLURM job array. Each array task runs one parameter combination through your training script via [Hydra](https://hydra.cc/) overrides. A user-provided launcher script handles container setup, environment modules, or any other runtime configuration.
+
+**Scope.** HyperHerd is opinionated: it assumes (1) SLURM job arrays as the dispatch mechanism, (2) `key=value` Hydra-style overrides as the parameter contract, and (3) a bash launcher script as the integration point. Trainers that don't use Hydra still work — your `launch.sh` is the adapter that translates the override string into whatever flags your CLI expects.
 
 ## Installation
 
 ### From source (recommended for development)
 
 ```bash
-git clone <repo-url> && cd hyperwhip
+git clone <repo-url> && cd hyperherd
 pip install -e .
 ```
 
@@ -22,7 +24,7 @@ pip install git+<repo-url>
 ### Verify installation
 
 ```bash
-whip --help
+herd --help
 ```
 
 This should print the available subcommands: `init`, `run`, `test`, `status`, `tail`, `res`, `clean`.
@@ -39,41 +41,41 @@ This should print the available subcommands: `init`, `run`, `test`, `status`, `t
 ### 1. Scaffold a new experiment
 
 ```bash
-whip init my_experiment --partition gpu --gres gpu:1
+herd init my_experiment --partition gpu --gres gpu:1
 ```
 
-This creates `my_experiment/hyperwhip.yaml` and `my_experiment/launch.sh` with sensible defaults. Edit both files to match your setup:
+This creates `my_experiment/hyperherd.yaml` and `my_experiment/launch.sh` with sensible defaults. Edit both files to match your setup:
 
-- **hyperwhip.yaml** — define your parameters, grid mode, SLURM resources, and conditions
+- **hyperherd.yaml** — define your parameters, grid mode, SLURM resources, and conditions
 - **launch.sh** — set up your container, conda environment, or module loads
 
 ### 2. Validate and preview
 
 ```bash
 # Validate Hydra config for trial 0 (runs locally via launcher with --cfg job):
-whip test my_experiment
+herd test my_experiment
 
 # Preview the full sweep (no SLURM interaction, runs preflight checks):
-whip run my_experiment --dry-run
+herd run my_experiment --dry-run
 ```
 
 ### 3. Launch
 
 ```bash
-whip run my_experiment
+herd run my_experiment
 ```
 
 ### 4. Monitor
 
 ```bash
-whip status my_experiment
+herd status my_experiment
 ```
 
 ### 5. Resubmit failures
 
 ```bash
 # Re-running only resubmits pending/failed trials:
-whip run my_experiment
+herd run my_experiment
 ```
 
 ### 6. Collect results
@@ -81,7 +83,7 @@ whip run my_experiment
 Log metrics from your training script:
 
 ```python
-from hyperwhip import log_result
+from hyperherd import log_result
 
 log_result("test_accuracy", 0.95)
 log_result("final_loss", 0.12)
@@ -90,13 +92,13 @@ log_result("final_loss", 0.12)
 Then print a TSV summary:
 
 ```bash
-whip res my_experiment
+herd res my_experiment
 ```
 
 ### 7. Clean up
 
 ```bash
-whip clean my_experiment --all
+herd clean my_experiment --all
 ```
 
 ## Documentation

@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from hyperwhip import manifest
+from hyperherd import manifest
 
 
 class TestManifest(unittest.TestCase):
@@ -136,7 +136,7 @@ class TestExperimentName(unittest.TestCase):
         self.assertIn("experiment_name=lr-0.001_opt-adam", overrides)
 
     def test_resolve_overrides_extras_win_over_statics(self):
-        from hyperwhip.constraints import Trial
+        from hyperherd.constraints import Trial
         manifest.init_workspace(self.tmpdir)
         trials = [Trial(params={"lr": 0.001}, extras={"scheduler.type": "cosine"})]
         manifest.create_manifest(self.tmpdir, trials, {"lr": "lr"})
@@ -164,7 +164,7 @@ class TestExperimentName(unittest.TestCase):
         self.assertEqual(name, "pre-a_lr-0.001")
 
     def test_manifest_persists_extras(self):
-        from hyperwhip.constraints import Trial
+        from hyperherd.constraints import Trial
         manifest.init_workspace(self.tmpdir)
         trials = [Trial(params={"opt": "adamw"}, extras={"scheduler.warmup": 1000})]
         manifest.create_manifest(self.tmpdir, trials, {"opt": "opt"})
@@ -175,7 +175,7 @@ class TestExperimentName(unittest.TestCase):
 
 class TestDiscreteLabels(unittest.TestCase):
     def test_slash_value_without_labels_rejected(self):
-        from hyperwhip.config import DiscreteParameter
+        from hyperherd.config import DiscreteParameter
         with self.assertRaises(Exception):
             DiscreteParameter(
                 type="discrete",
@@ -184,7 +184,7 @@ class TestDiscreteLabels(unittest.TestCase):
             )
 
     def test_slash_value_with_labels_accepted(self):
-        from hyperwhip.config import DiscreteParameter
+        from hyperherd.config import DiscreteParameter
         p = DiscreteParameter(
             type="discrete",
             abbrev="m",
@@ -194,7 +194,7 @@ class TestDiscreteLabels(unittest.TestCase):
         self.assertEqual(p.label_for("/scratch/a.ckpt"), "a")
 
     def test_label_with_slash_rejected(self):
-        from hyperwhip.config import DiscreteParameter
+        from hyperherd.config import DiscreteParameter
         with self.assertRaises(Exception):
             DiscreteParameter(
                 type="discrete",
@@ -204,7 +204,7 @@ class TestDiscreteLabels(unittest.TestCase):
             )
 
     def test_labels_length_mismatch_rejected(self):
-        from hyperwhip.config import DiscreteParameter
+        from hyperherd.config import DiscreteParameter
         with self.assertRaises(Exception):
             DiscreteParameter(
                 type="discrete",
@@ -214,7 +214,7 @@ class TestDiscreteLabels(unittest.TestCase):
             )
 
     def test_duplicate_labels_rejected(self):
-        from hyperwhip.config import DiscreteParameter
+        from hyperherd.config import DiscreteParameter
         with self.assertRaises(Exception):
             DiscreteParameter(
                 type="discrete",
@@ -224,7 +224,7 @@ class TestDiscreteLabels(unittest.TestCase):
             )
 
     def test_config_labels_property_exposes_mapping(self):
-        from hyperwhip.config import Config
+        from hyperherd.config import Config
         cfg = Config.model_validate({
             "name": "t",
             "workspace": "/tmp",

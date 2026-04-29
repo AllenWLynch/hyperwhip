@@ -4,7 +4,7 @@ import itertools
 import math
 from typing import Any, Dict, List
 
-from hyperwhip.config import Config, ContinuousParameter, DiscreteParameter, ParameterSpec
+from hyperherd.config import Config, ContinuousParameter, DiscreteParameter, ParameterSpec
 
 
 def _discretize_continuous(param: ContinuousParameter) -> List[Any]:

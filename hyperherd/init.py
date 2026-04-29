@@ -1,4 +1,4 @@
-"""Scaffold a starter hyperwhip.yaml and launch.sh."""
+"""Scaffold a starter hyperherd.yaml and launch.sh."""
 
 import os
 import stat
@@ -28,7 +28,7 @@ parameters:
 
 LAUNCHER_TEMPLATE = """\
 #!/bin/bash
-# launch.sh — Launcher script for HyperWhip
+# launch.sh — Launcher script for HyperHerd
 # Receives Hydra overrides as $1. Modify this script to set up your
 # container, conda environment, modules, or any other runtime config.
 set -euo pipefail
@@ -63,7 +63,7 @@ def scaffold(
     from_config=None,
     from_launcher=None,
 ):
-    """Generate hyperwhip.yaml and launch.sh in the given directory.
+    """Generate hyperherd.yaml and launch.sh in the given directory.
 
     If from_config is given, copies that file instead of generating a template.
     If from_launcher is given, copies that file instead of generating a template.
@@ -80,11 +80,11 @@ def scaffold(
         if not name or name == ".":
             name = "experiment"
 
-    config_path = os.path.join(directory, "hyperwhip.yaml")
+    config_path = os.path.join(directory, "hyperherd.yaml")
     launcher_path = os.path.join(directory, "launch.sh")
 
     if not overwrite:
-        for path, label in [(config_path, "hyperwhip.yaml"), (launcher_path, "launch.sh")]:
+        for path, label in [(config_path, "hyperherd.yaml"), (launcher_path, "launch.sh")]:
             if os.path.exists(path):
                 raise FileExistsError(
                     f"{label} already exists at {path}. Use --force to overwrite."

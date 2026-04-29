@@ -1,40 +1,40 @@
-# HyperWhip Configuration Guide
+# HyperHerd Configuration Guide
 
-This document describes how to write a HyperWhip configuration file (`hyperwhip.yaml`) and the companion launcher script (`launch.sh`). HyperWhip uses these two files to generate and submit SLURM job arrays that sweep over hyperparameter combinations.
+This document describes how to write a HyperHerd configuration file (`hyperherd.yaml`) and the companion launcher script (`launch.sh`). HyperHerd uses these two files to generate and submit SLURM job arrays that sweep over hyperparameter combinations.
 
 ## Overview
 
-A HyperWhip experiment requires exactly two user-authored files:
+A HyperHerd experiment requires exactly two user-authored files:
 
-1. **`hyperwhip.yaml`** — declares the hyperparameter search space, SLURM resources, conditions, and static Hydra overrides.
+1. **`hyperherd.yaml`** — declares the hyperparameter search space, SLURM resources, conditions, and static Hydra overrides.
 2. **`launch.sh`** — a bash script that receives a Hydra override string as its first argument (`$1`) and runs the training command inside whatever environment you need (container, conda, modules, etc.).
 
-Both files live in a **workspace directory**. All HyperWhip commands take the workspace directory as their argument:
+Both files live in a **workspace directory**. All HyperHerd commands take the workspace directory as their argument:
 
 ```bash
 # Scaffold a new experiment:
-whip init my_experiment --partition gpu --gres gpu:1
+herd init my_experiment --partition gpu --gres gpu:1
 
 # Validate Hydra config locally:
-whip test my_experiment
+herd test my_experiment
 
 # Preview what will be submitted (no SLURM interaction):
-whip run my_experiment --dry-run
+herd run my_experiment --dry-run
 
 # Submit the job array:
-whip run my_experiment
+herd run my_experiment
 
 # Check status:
-whip status my_experiment
+herd status my_experiment
 
 # Tail a specific trial's log:
-whip tail my_experiment 3
+herd tail my_experiment 3
 
 # Print results TSV:
-whip res my_experiment
+herd res my_experiment
 
 # Cancel and clean up:
-whip clean my_experiment --all
+herd clean my_experiment --all
 ```
 
 ---
@@ -47,7 +47,7 @@ The configuration file is YAML. Every field is documented below with its type, w
 
 | Field         | Type   | Required | Default | Description |
 |---------------|--------|----------|---------|-------------|
-| `name`        | string | **yes**  | —       | Unique experiment name. Used in the SLURM job name (`hyperwhip_<name>`). Must be a valid filename component. |
+| `name`        | string | **yes**  | —       | Unique experiment name. Used in the SLURM job name (`hyperherd_<name>`). Must be a valid filename component. |
 | `grid`        | string or list | no | *omitted* | Controls which parameters are swept via Cartesian product. See [grid](#grid). |
 | `launcher`    | string | **yes**  | —       | Path to the launcher bash script. Relative paths are resolved relative to the config file's directory. See [Launcher Script](#launcher-script). |
 | `slurm`       | object | no       | see below | SLURM resource requests. See [slurm](#slurm). |
@@ -55,7 +55,7 @@ The configuration file is YAML. Every field is documented below with its type, w
 | `parameters`  | object | **yes**  | —       | Hyperparameter definitions. At least one parameter is required. See [parameters](#parameters). |
 | `conditions`  | list   | no       | `[]`    | Conditional rules that filter or modify parameter combinations. Also accepts the legacy key `constraints`. See [conditions](#conditions). |
 
-The **workspace** is the directory containing `hyperwhip.yaml`. HyperWhip stores its state in a `.hyperwhip/` subdirectory within the workspace.
+The **workspace** is the directory containing `hyperherd.yaml`. HyperHerd stores its state in a `.hyperherd/` subdirectory within the workspace.
 
 ---
 
@@ -101,7 +101,7 @@ SLURM resource requests. These map directly to `#SBATCH` directives in the gener
 | `mem`           | string       | no       | `"8G"`       | Memory per node (e.g. `"16G"`, `"512M"`). |
 | `cpus_per_task` | integer      | no       | `1`          | Number of CPU cores per task. |
 | `gres`          | string       | no       | *omitted*    | Generic resources (e.g. `"gpu:1"`, `"gpu:a100:2"`). If omitted, the `--gres` line is not included. |
-| `max_concurrent`| integer      | no       | *omitted*    | Cap on simultaneously running array tasks. Appended as `%N` to the SLURM array spec (e.g. `--array=0-49%5`). Override per-run with `whip run --max-concurrent N`. |
+| `max_concurrent`| integer      | no       | *omitted*    | Cap on simultaneously running array tasks. Appended as `%N` to the SLURM array spec (e.g. `--array=0-49%5`). Override per-run with `herd run --max-concurrent N`. |
 | `extra_args`    | list[string] | no       | `[]`         | Additional raw `#SBATCH` flags. Each string is placed after `#SBATCH ` verbatim. |
 
 ```yaml
@@ -133,7 +133,7 @@ hydra:
     - "trainer.seed=42"
 ```
 
-**How overrides reach the training command**: HyperWhip constructs a Hydra override string for each trial by combining:
+**How overrides reach the training command**: HyperHerd constructs a Hydra override string for each trial by combining:
 1. `experiment_name=<name>` (built from parameter abbreviations, e.g. `lr-0.001_opt-adam_bs-64`)
 2. Each parameter's `name=value`
 3. Any `static_overrides`
@@ -145,9 +145,9 @@ experiment_name=lr-0.001_opt-adam_bs-64 learning_rate=0.001 optimizer=adam batch
 ```
 
 Additionally, three environment variables are exported in the SLURM script:
-- `HYPERWHIP_WORKSPACE` — absolute path to the workspace directory
-- `HYPERWHIP_TRIAL_ID` — the array task index (same as `$SLURM_ARRAY_TASK_ID`)
-- `HYPERWHIP_EXPERIMENT_NAME` — the experiment name string (e.g. `lr-0.001_opt-adam_bs-64`)
+- `HYPERHERD_WORKSPACE` — absolute path to the workspace directory
+- `HYPERHERD_TRIAL_ID` — the array task index (same as `$SLURM_ARRAY_TASK_ID`)
+- `HYPERHERD_EXPERIMENT_NAME` — the experiment name string (e.g. `lr-0.001_opt-adam_bs-64`)
 
 These can be used for output directories, wandb run names, logging, and the `log_result()` API.
 
@@ -303,14 +303,14 @@ This means `set` is the right place for **conditional adjustments** that should 
 
 ## Launcher Script
 
-The launcher script is a user-provided bash script. HyperWhip does **not** manage your container runtime, environment modules, conda environments, or any other setup.
+The launcher script is a user-provided bash script. HyperHerd does **not** manage your container runtime, environment modules, conda environments, or any other setup.
 
 ### Contract
 
-1. HyperWhip calls your launcher as: `bash <launcher_path> "<hydra_overrides>"`
+1. HyperHerd calls your launcher as: `bash <launcher_path> "<hydra_overrides>"`
 2. The first argument (`$1`) is a space-separated Hydra override string.
 3. Your script must invoke the Hydra training command with these overrides.
-4. SLURM environment variables (`$SLURM_JOB_ID`, `$SLURM_ARRAY_TASK_ID`, etc.) are available, plus `$HYPERWHIP_WORKSPACE`, `$HYPERWHIP_TRIAL_ID`, and `$HYPERWHIP_EXPERIMENT_NAME`.
+4. SLURM environment variables (`$SLURM_JOB_ID`, `$SLURM_ARRAY_TASK_ID`, etc.) are available, plus `$HYPERHERD_WORKSPACE`, `$HYPERHERD_TRIAL_ID`, and `$HYPERHERD_EXPERIMENT_NAME`.
 5. Exit code 0 means success; nonzero means failure.
 
 ### Example: Apptainer/Singularity launcher
@@ -357,9 +357,9 @@ srun --container-image="$IMAGE" \
 
 ### Idempotency requirements
 
-HyperWhip's `run` command is idempotent — rerunning it resubmits only pending and failed trials with the same array indices and parameters. For this to work, **your Hydra application must also be idempotent**:
+HyperHerd's `run` command is idempotent — rerunning it resubmits only pending and failed trials with the same array indices and parameters. For this to work, **your Hydra application must also be idempotent**:
 
-- **Checkpoint on a deterministic path**: Use `$HYPERWHIP_EXPERIMENT_NAME` or `$HYPERWHIP_TRIAL_ID` to construct a unique, stable output directory.
+- **Checkpoint on a deterministic path**: Use `$HYPERHERD_EXPERIMENT_NAME` or `$HYPERHERD_TRIAL_ID` to construct a unique, stable output directory.
 - **Resume from checkpoint**: On startup, check if a checkpoint exists and resume.
 - **Do not fail on existing output**: Handle pre-existing output directories gracefully.
 
@@ -367,7 +367,7 @@ Example using the experiment name for output paths:
 
 ```python
 import os
-exp_name = os.environ.get("HYPERWHIP_EXPERIMENT_NAME", "default")
+exp_name = os.environ.get("HYPERHERD_EXPERIMENT_NAME", "default")
 output_dir = f"./outputs/{exp_name}"
 ```
 
@@ -375,12 +375,12 @@ output_dir = f"./outputs/{exp_name}"
 
 ## Result Logging
 
-HyperWhip provides a lightweight API for logging per-trial summary metrics from within your training script. This is intended for final/test metrics — use wandb or similar for high-density training logs.
+HyperHerd provides a lightweight API for logging per-trial summary metrics from within your training script. This is intended for final/test metrics — use wandb or similar for high-density training logs.
 
 ### Logging from training code
 
 ```python
-from hyperwhip import log_result
+from hyperherd import log_result
 
 # Call at the end of training or evaluation:
 log_result("test_accuracy", 0.95)
@@ -388,7 +388,7 @@ log_result("final_loss", 0.12)
 log_result("epochs_completed", 50)
 ```
 
-`log_result(name, value)` writes to `.hyperwhip/results/<trial_id>.json` in the workspace. It resolves the write path from the `HYPERWHIP_WORKSPACE` and `HYPERWHIP_TRIAL_ID` environment variables, which are set automatically by `whip run` and `whip test`.
+`log_result(name, value)` writes to `.hyperherd/results/<trial_id>.json` in the workspace. It resolves the write path from the `HYPERHERD_WORKSPACE` and `HYPERHERD_TRIAL_ID` environment variables, which are set automatically by `herd run` and `herd test`.
 
 - Can be called multiple times — metrics accumulate in a single JSON file per trial.
 - Calling with the same metric name overwrites the previous value.
@@ -397,7 +397,7 @@ log_result("epochs_completed", 50)
 ### Viewing results
 
 ```bash
-whip res my_experiment
+herd res my_experiment
 ```
 
 Prints a TSV table with all trial parameters and logged metrics:
@@ -416,17 +416,17 @@ Trials without results show empty cells. Pipe to `column -t` for aligned display
 
 ## Validating Before Submission
 
-### Config validation (`whip run --dry-run`)
+### Config validation (`herd run --dry-run`)
 
-The `--dry-run` flag on `whip run` validates the HyperWhip config, runs preflight checks (launcher exists, workspace is writable, partition exists), generates the trial manifest, and prints the sbatch script and trial listing — all without submitting to SLURM.
+The `--dry-run` flag on `herd run` validates the HyperHerd config, runs preflight checks (launcher exists, workspace is writable, partition exists), generates the trial manifest, and prints the sbatch script and trial listing — all without submitting to SLURM.
 
 Non-default parameter values are highlighted in the dry-run output so you can verify the sweep at a glance.
 
-### Hydra config validation (`whip test`)
+### Hydra config validation (`herd test`)
 
 ```bash
-whip test my_experiment       # test trial 0
-whip test my_experiment 5     # test trial 5
+herd test my_experiment       # test trial 0
+herd test my_experiment 5     # test trial 5
 ```
 
 This runs a single trial locally via your launcher script with `--cfg job` appended to the Hydra overrides. Hydra prints the fully resolved config and exits without running training. This catches:
@@ -435,7 +435,7 @@ This runs a single trial locally via your launcher script with `--cfg job` appen
 - Type mismatches between overrides and the Hydra schema
 - Missing required config fields
 
-Note: `whip test` runs on the login node, so it requires your launcher's environment to be accessible locally (e.g. conda env). If your launcher requires a GPU container, you'll need to test manually or adapt the launcher to handle the `--cfg job` case.
+Note: `herd test` runs on the login node, so it requires your launcher's environment to be accessible locally (e.g. conda env). If your launcher requires a GPU container, you'll need to test manually or adapt the launcher to handle the `--cfg job` case.
 
 ---
 
@@ -449,11 +449,11 @@ my_project/
   configs/
     config.yaml             # Your Hydra base config
   my_experiment/
-    hyperwhip.yaml           # HyperWhip sweep configuration
+    hyperherd.yaml           # HyperHerd sweep configuration
     launch.sh                # Launcher script
 ```
 
-### `my_experiment/hyperwhip.yaml`
+### `my_experiment/hyperherd.yaml`
 
 ```yaml
 name: resnet_sweep
@@ -532,7 +532,7 @@ apptainer exec --nv \
 ### `train.py` (excerpt)
 
 ```python
-from hyperwhip import log_result
+from hyperherd import log_result
 
 # ... training loop ...
 
@@ -545,41 +545,41 @@ log_result("final_loss", final_loss)
 
 ```bash
 # Validate Hydra config:
-whip test my_experiment
+herd test my_experiment
 
 # See what would be submitted:
-whip run my_experiment --dry-run
+herd run my_experiment --dry-run
 
 # Submit:
-whip run my_experiment
+herd run my_experiment
 
 # Check progress:
-whip status my_experiment
+herd status my_experiment
 
 # Tail trial 5's log:
-whip tail my_experiment 5
+herd tail my_experiment 5
 
 # Re-run to resubmit any failed trials:
-whip run my_experiment
+herd run my_experiment
 
 # View results:
-whip res my_experiment
+herd res my_experiment
 
 # Clean up everything:
-whip clean my_experiment --all
+herd clean my_experiment --all
 ```
 
 ---
 
 ## Workspace Layout
 
-After `whip run`, the workspace directory contains:
+After `herd run`, the workspace directory contains:
 
 ```
 my_experiment/
-  hyperwhip.yaml
+  hyperherd.yaml
   launch.sh
-  .hyperwhip/
+  .hyperherd/
     manifest.json       # Array of trial objects: {index, params, experiment_name, status}
     job_ids.json        # Records of submitted SLURM jobs
     job.sbatch          # The generated SLURM batch script
@@ -596,40 +596,40 @@ my_experiment/
 - **manifest.json**: The authoritative mapping of array index to parameter values and experiment names. Do not edit manually.
 - **job.sbatch**: The generated script. You can inspect it to verify correctness.
 - **logs/**: SLURM captures stdout/stderr here. The `status` command reads the last line of each `.out` file.
-- **results/**: Per-trial metric files written by `log_result()`. Read by `whip res`.
+- **results/**: Per-trial metric files written by `log_result()`. Read by `herd res`.
 
 ---
 
 ## Generated SLURM Script
 
-For reference, HyperWhip generates a batch script like this:
+For reference, HyperHerd generates a batch script like this:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=hyperwhip_resnet_sweep
+#SBATCH --job-name=hyperherd_resnet_sweep
 #SBATCH --array=0-11
 #SBATCH --partition=gpu
 #SBATCH --time=08:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:a100:1
-#SBATCH --output=<workspace>/.hyperwhip/logs/%a.out
-#SBATCH --error=<workspace>/.hyperwhip/logs/%a.err
+#SBATCH --output=<workspace>/.hyperherd/logs/%a.out
+#SBATCH --error=<workspace>/.hyperherd/logs/%a.err
 #SBATCH --export=ALL
 
-# Export HyperWhip environment variables
-export HYPERWHIP_WORKSPACE="<workspace>"
-export HYPERWHIP_TRIAL_ID="$SLURM_ARRAY_TASK_ID"
-export HYPERWHIP_EXPERIMENT_NAME=$(python -m hyperwhip resolve-name "<workspace>/.hyperwhip/manifest.json" "$SLURM_ARRAY_TASK_ID")
+# Export HyperHerd environment variables
+export HYPERHERD_WORKSPACE="<workspace>"
+export HYPERHERD_TRIAL_ID="$SLURM_ARRAY_TASK_ID"
+export HYPERHERD_EXPERIMENT_NAME=$(python -m hyperherd resolve-name "<workspace>/.hyperherd/manifest.json" "$SLURM_ARRAY_TASK_ID")
 
 # Resolve Hydra overrides for this array task (includes experiment_name=...)
-OVERRIDES=$(python -m hyperwhip resolve-overrides "<workspace>/.hyperwhip/manifest.json" "$SLURM_ARRAY_TASK_ID" --static "data.root=/scratch/imagenet trainer.max_epochs=90")
+OVERRIDES=$(python -m hyperherd resolve-overrides "<workspace>/.hyperherd/manifest.json" "$SLURM_ARRAY_TASK_ID" --static "data.root=/scratch/imagenet trainer.max_epochs=90")
 
 # Invoke the user's launcher script
 bash "<workspace>/launch.sh" "$OVERRIDES"
 ```
 
-The `resolve-overrides` and `resolve-name` subcommands are internal HyperWhip utilities. They read `manifest.json` and print the override string or experiment name for a given array task ID. This means `python` and the `hyperwhip` package must be available on the compute node (outside the container).
+The `resolve-overrides` and `resolve-name` subcommands are internal HyperHerd utilities. They read `manifest.json` and print the override string or experiment name for a given array task ID. This means `python` and the `hyperherd` package must be available on the compute node (outside the container).
 
 ### Compute nodes without Python
 
@@ -639,7 +639,7 @@ If `python` is not available on the bare compute node, you can read the manifest
 #!/bin/bash
 set -euo pipefail
 
-MANIFEST=".hyperwhip/manifest.json"
+MANIFEST=".hyperherd/manifest.json"
 TASK_ID="$SLURM_ARRAY_TASK_ID"
 
 # Build overrides from manifest using jq

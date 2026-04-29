@@ -1,4 +1,4 @@
-"""Parse and validate hyperwhip YAML configuration files."""
+"""Parse and validate hyperherd YAML configuration files."""
 
 import os
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -279,7 +279,7 @@ class ConfigError(Exception):
     pass
 
 
-CONFIG_FILENAME = "hyperwhip.yaml"
+CONFIG_FILENAME = "hyperherd.yaml"
 
 
 def load_config(path: str) -> Config:

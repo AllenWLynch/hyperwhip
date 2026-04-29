@@ -1,9 +1,9 @@
 """MNIST classifier with PyTorch Lightning + Hydra.
 
-Demonstrates idempotent training with HyperWhip:
+Demonstrates idempotent training with HyperHerd:
 - Checkpoints to a deterministic path based on experiment_name
 - Resumes from checkpoint automatically on re-run
-- Logs final test metrics via hyperwhip.log_result()
+- Logs final test metrics via hyperherd.log_result()
 """
 
 import os
@@ -176,17 +176,17 @@ def main(cfg: DictConfig) -> None:
     best_ckpt = checkpoint_cb.best_model_path or last_ckpt
     test_results = trainer.test(model, datamodule=datamodule, ckpt_path=best_ckpt)
 
-    # Log results to HyperWhip
+    # Log results to HyperHerd
     if test_results:
         metrics = test_results[0]
         try:
-            from hyperwhip import log_result
+            from hyperherd import log_result
             log_result("test_acc", metrics.get("test_acc", 0.0))
             log_result("test_loss", metrics.get("test_loss", 0.0))
             log_result("best_val_acc", float(checkpoint_cb.best_model_score or 0.0))
-            print(f"\nResults logged to HyperWhip workspace.")
+            print(f"\nResults logged to HyperHerd workspace.")
         except (ImportError, RuntimeError):
-            # hyperwhip not installed or not running inside a whip trial
+            # hyperherd not installed or not running inside a herd trial
             print(f"\nTest accuracy: {metrics.get('test_acc', 0.0):.4f}")
             print(f"Test loss: {metrics.get('test_loss', 0.0):.4f}")
 

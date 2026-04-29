@@ -1,43 +1,43 @@
-"""Lightweight result logging for HyperWhip trials.
+"""Lightweight result logging for HyperHerd trials.
 
 Usage from within a training script:
 
-    from hyperwhip.logging import log_result
+    from hyperherd.logging import log_result
 
     log_result("test_accuracy", 0.95)
     log_result("test_loss", 0.12)
     log_result("epochs_completed", 50)
 
-Results are written to .hyperwhip/results/<trial_id>.json in the workspace.
-The workspace and trial ID are resolved from HYPERWHIP_WORKSPACE and
-HYPERWHIP_TRIAL_ID environment variables (set automatically by mush).
+Results are written to .hyperherd/results/<trial_id>.json in the workspace.
+The workspace and trial ID are resolved from HYPERHERD_WORKSPACE and
+HYPERHERD_TRIAL_ID environment variables (set automatically by mush).
 """
 
 import json
 import os
 
-from hyperwhip.manifest import WORKSPACE_DIR
+from hyperherd.manifest import WORKSPACE_DIR
 
 RESULTS_DIR = "results"
 
 
 def _results_dir() -> str:
-    workspace = os.environ.get("HYPERWHIP_WORKSPACE")
+    workspace = os.environ.get("HYPERHERD_WORKSPACE")
     if not workspace:
         raise RuntimeError(
-            "HYPERWHIP_WORKSPACE not set. "
-            "log_result() must be called from within a HyperWhip trial "
+            "HYPERHERD_WORKSPACE not set. "
+            "log_result() must be called from within a HyperHerd trial "
             "(launched via 'mush launch' or 'mush test')."
         )
     return os.path.join(workspace, WORKSPACE_DIR, RESULTS_DIR)
 
 
 def _results_path() -> str:
-    trial_id = os.environ.get("HYPERWHIP_TRIAL_ID")
+    trial_id = os.environ.get("HYPERHERD_TRIAL_ID")
     if trial_id is None:
         raise RuntimeError(
-            "HYPERWHIP_TRIAL_ID not set. "
-            "log_result() must be called from within a HyperWhip trial."
+            "HYPERHERD_TRIAL_ID not set. "
+            "log_result() must be called from within a HyperHerd trial."
         )
     return os.path.join(_results_dir(), f"{trial_id}.json")
 
