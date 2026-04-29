@@ -518,7 +518,7 @@ def _sync_slurm_status(workspace: str):
     state_map = {
         "COMPLETED": "completed",
         "RUNNING": "running",
-        "PENDING": "queued",     # SLURM queued != never submitted
+        "PENDING": "queued",     # SLURM queued (waiting to start) != "ready" (never submitted)
         "FAILED": "failed",
         "CANCELLED": "cancelled",
         "TIMEOUT": "failed",
@@ -591,8 +591,8 @@ def main():
 
     # tail
     p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log")
-    p_tail.add_argument("index", type=int, help="Trial index to tail")
     p_tail.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
+    p_tail.add_argument("index", type=int, help="Trial index to tail")
     p_tail.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show (default: 20)")
 
     # results

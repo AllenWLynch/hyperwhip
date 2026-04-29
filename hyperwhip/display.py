@@ -12,8 +12,8 @@ _DIM = "\033[2m"
 _STATUS_COLORS = {
     "COMPLETED": "\033[32m",  # green
     "RUNNING": "\033[34m",    # blue
-    "PENDING": "\033[33m",    # yellow
-    "QUEUED": "\033[33m",     # yellow (SLURM pending)
+    "READY": "\033[90m",      # gray (never submitted)
+    "QUEUED": "\033[33m",     # yellow (SLURM PENDING — waiting in queue)
     "SUBMITTED": "\033[33m",  # yellow
     "FAILED": "\033[31m",     # red
     "CANCELLED": "\033[90m",  # gray
@@ -119,7 +119,7 @@ def print_summary(trials: List[dict]) -> None:
 
     total = len(trials)
     parts = []
-    for status in ["COMPLETED", "RUNNING", "QUEUED", "SUBMITTED", "PENDING", "FAILED", "CANCELLED"]:
+    for status in ["COMPLETED", "RUNNING", "QUEUED", "SUBMITTED", "READY", "FAILED", "CANCELLED"]:
         if status in counts:
             parts.append(_colorize_status(f"{status}: {counts[status]}", status))
 

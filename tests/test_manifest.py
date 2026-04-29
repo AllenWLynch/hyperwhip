@@ -30,7 +30,7 @@ class TestManifest(unittest.TestCase):
         trials = manifest.create_manifest(self.tmpdir, combos)
         self.assertEqual(len(trials), 2)
         self.assertEqual(trials[0]["index"], 0)
-        self.assertEqual(trials[0]["status"], "pending")
+        self.assertEqual(trials[0]["status"], "ready")
 
         loaded = manifest.load_manifest(self.tmpdir)
         self.assertEqual(len(loaded), 2)
@@ -43,7 +43,7 @@ class TestManifest(unittest.TestCase):
         manifest.update_trial_status(self.tmpdir, 0, "running")
         trials = manifest.load_manifest(self.tmpdir)
         self.assertEqual(trials[0]["status"], "running")
-        self.assertEqual(trials[1]["status"], "pending")
+        self.assertEqual(trials[1]["status"], "ready")
 
     def test_bulk_update(self):
         manifest.init_workspace(self.tmpdir)
@@ -52,7 +52,7 @@ class TestManifest(unittest.TestCase):
         manifest.bulk_update_status(self.tmpdir, {0: "completed", 2: "failed"})
         trials = manifest.load_manifest(self.tmpdir)
         self.assertEqual(trials[0]["status"], "completed")
-        self.assertEqual(trials[1]["status"], "pending")
+        self.assertEqual(trials[1]["status"], "ready")
         self.assertEqual(trials[2]["status"], "failed")
 
     def test_get_pending_indices(self):
