@@ -108,6 +108,13 @@ class Constraint(BaseModel):
     @model_validator(mode="after")
     def _validate_when_matchers(self):
         for param, matcher in self.when.items():
+            if param == "expr":
+                # Validated separately; needs the global parameter set.
+                if not isinstance(matcher, str) or not matcher.strip():
+                    raise ValueError(
+                        f"Constraint '{self.name}': 'when.expr' must be a non-empty string"
+                    )
+                continue
             if isinstance(matcher, dict):
                 if len(matcher) != 1:
                     raise ValueError(
@@ -130,11 +137,17 @@ class Constraint(BaseModel):
     @model_validator(mode="after")
     def _validate_set_keys(self):
         if self.set:
-            for k in self.set:
+            for k, v in self.set.items():
                 if not isinstance(k, str) or not k:
                     raise ValueError(
                         f"Constraint '{self.name}': 'set' keys must be non-empty strings"
                     )
+                if isinstance(v, dict) and set(v.keys()) == {"expr"}:
+                    if not isinstance(v["expr"], str) or not v["expr"].strip():
+                        raise ValueError(
+                            f"Constraint '{self.name}': 'set.{k}.expr' must be "
+                            f"a non-empty string"
+                        )
         return self
 
     @model_validator(mode="before")
@@ -210,9 +223,31 @@ class Config(BaseModel):
                         f"(grid is not set, so all parameters need defaults)"
                     )
 
+        # Expression namespace: param names with +/~ prefixes stripped.
+        # Validate uniqueness here once for the whole config.
+        from hyperherd.expr import (
+            ExprError,
+            sanitized_namespace,
+            validate_expr,
+            validate_namespace_keys,
+        )
+        try:
+            validate_namespace_keys(param_names)
+        except ExprError as e:
+            raise ValueError(str(e)) from e
+        expr_names = set(sanitized_namespace({n: None for n in param_names}).keys())
+
         # Validate condition references
         for constraint in self.conditions:
             for ref in constraint.when:
+                if ref == "expr":
+                    try:
+                        validate_expr(constraint.when["expr"], expr_names)
+                    except ExprError as e:
+                        raise ValueError(
+                            f"Constraint '{constraint.name}': {e}"
+                        ) from e
+                    continue
                 if ref not in param_names:
                     raise ValueError(
                         f"Constraint '{constraint.name}': 'when' references "
@@ -232,6 +267,15 @@ class Config(BaseModel):
                             f"Constraint '{constraint.name}': 'force' references "
                             f"unknown parameter '{ref}'"
                         )
+            if constraint.set:
+                for k, v in constraint.set.items():
+                    if isinstance(v, dict) and set(v.keys()) == {"expr"}:
+                        try:
+                            validate_expr(v["expr"], expr_names)
+                        except ExprError as e:
+                            raise ValueError(
+                                f"Constraint '{constraint.name}': set.{k}: {e}"
+                            ) from e
             # Note: `set` keys are arbitrary Hydra paths and intentionally not
             # validated against `parameters` — that's the whole point.
 

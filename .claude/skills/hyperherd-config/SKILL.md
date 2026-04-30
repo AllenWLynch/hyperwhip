@@ -45,8 +45,48 @@ Each value in a condition's `when:` block can be:
 | scalar | `optimizer: sgd` | exact match |
 | list | `optimizer: [sgd, momentum_sgd]` | OR — any element |
 | operator map | `learning_rate: {gt: 0.01}` | `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `in`, `not_in` |
+| `expr` | `expr: "opt == 'adam' and lr > 0.01"` | free-form expression over params |
 
-Multiple keys in one `when` are AND'd. Use a list to avoid duplicating a condition for several values of the same parameter.
+Multiple keys in one `when` are AND'd (including `expr` — it combines with structured matchers). Use a list to avoid duplicating a condition for several values of the same parameter.
+
+### Expressions in `when` and `set`
+
+`when.expr` and `set.<key>.expr` evaluate a small whitelisted expression language against the trial's parameters. Use it when structured matchers can't say what you mean (predicate over multiple params) or when an extra override should be **computed** from sweep values.
+
+```yaml
+parameters:
+  y: {type: discrete, abbrev: y, values: [1, 3, 5]}
+
+conditions:
+  - name: x_from_y
+    when:
+      expr: "y >= 3"           # predicate over swept params
+    set:
+      x: {expr: "20 * y"}      # computed extra override
+      scheduler.warmup: 100    # literals still work
+```
+
+Allowed: arithmetic (`+ - * / // % **`), comparisons (chained too: `0 < x < 10`), `and`/`or`/`not`, `in` / `not in` against tuple/list literals, `x if cond else y`, numbers/strings/booleans/`None`, names of swept parameters.
+
+Rejected at config-load time: function calls, attribute access, subscripting, lambdas, comprehensions, f-strings, any unknown name.
+
+`+`/`~`/`++` prefixes are stripped in the expression namespace, so `+experiment` is referenced as `experiment` inside an expr. If two parameters would collide after stripping (e.g. both `foo` and `+foo`), config validation fails.
+
+`set.<key>.expr` is evaluated **after** `force:`, so the expression sees forced values, not pre-force ones.
+
+## Hydra `+key` / `~key` overrides
+
+To inject a Hydra override that *adds* a new key (`+experiment=foo`) or *removes* one (`~foo`), put the prefix directly in the parameter name:
+
+```yaml
+parameters:
+  +experiment:
+    type: discrete
+    abbrev: exp
+    values: [small, large]
+```
+
+This emits `+experiment=small` in the override string. The `abbrev` keeps the `+` out of `experiment_name` (which would otherwise break Hydra). Same pattern works for `~foo` (delete) and `++foo` (force add/replace), and inside `force` / `set` keys.
 
 ## Override ordering (memorize this)
 
@@ -264,7 +304,7 @@ herd run <workspace>              # actually submit
 
 ## Authoring discipline
 
-- Don't invent fields. The full set is in `docs/configuration.md`. If the user asks for something the schema doesn't support (e.g. computed expressions in `set`), say so and suggest the closest supported alternative.
+- Don't invent fields. The full set is in `docs/configuration.md`. If the user asks for something outside the supported expr language (function calls, attribute access, etc.), say so and suggest restructuring with `if/else` or a structured matcher.
 - Don't recommend `constraints:` for new configs — `conditions:` is the canonical key (the legacy alias is for backward compat only).
 - Pick `abbrev` values that read well in filenames: `lr`, `opt`, `wd`, `bs`, `nl`, `do` (dropout), `sd` (seed), etc.
 - When the user asks for a sweep, default to **partial grid** if they name 2–3 swept params and the rest are fixed; default to **full grid** only if they explicitly want a Cartesian product.

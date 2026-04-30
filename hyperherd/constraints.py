@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from hyperherd.config import Constraint
+from hyperherd.expr import eval_expr, sanitized_namespace
 
 
 @dataclass
@@ -82,8 +83,13 @@ def _match_one(actual: Any, matcher: Any) -> bool:
 
 
 def _match_when(combo: Dict[str, Any], when: Dict[str, Any]) -> bool:
-    """All `when` clauses must match (AND across params)."""
+    """All `when` clauses must match (AND across params + optional `expr`)."""
     for param, matcher in when.items():
+        if param == "expr":
+            # Expression already validated at config-load time.
+            if not bool(eval_expr(matcher, sanitized_namespace(combo))):
+                return False
+            continue
         if param not in combo:
             return False
         if not _match_one(combo[param], matcher):
@@ -132,8 +138,14 @@ def apply_constraints(
                     trial = Trial(params=trial.params, extras={})
                 else:
                     trial = Trial(params=trial.params, extras=dict(trial.extras))
+                ns = sanitized_namespace(trial.params)
                 for k, v in constraint.set.items():
-                    trial.extras[k] = v
+                    if isinstance(v, dict) and set(v.keys()) == {"expr"}:
+                        # Expression already validated at config-load time;
+                        # evaluated against post-force params.
+                        trial.extras[k] = eval_expr(v["expr"], ns)
+                    else:
+                        trial.extras[k] = v
 
             next_trials.append(trial)
 
