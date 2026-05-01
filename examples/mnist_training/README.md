@@ -65,10 +65,21 @@ herd run .
 # Monitor progress:
 herd status .
 
+# SLURM accounting (runtime, peak/avg memory) for every trial — or one:
+herd stats .
+herd stats . 3
+
 # Tail a trial's log:
 herd tail . 0
 
-# Re-run to resubmit failed trials (they resume from checkpoint):
+# Cancel one trial, or every live trial:
+herd stop . 3
+herd stop . --all
+
+# Re-run to resubmit failed trials (they resume from checkpoint).
+# If you edit hyperherd.yaml between runs, herd reconciles the manifest:
+# new values append as fresh trials, removed ones drop (or, if any already
+# ran/completed, --force keeps them as orphans).
 herd run .
 
 # Collect results:
