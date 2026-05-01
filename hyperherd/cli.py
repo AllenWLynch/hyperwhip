@@ -209,13 +209,6 @@ def cmd_stats(args):
         print("No workspace found. Run 'herd run' first.", file=sys.stderr)
         return 1
 
-    if (args.index is None) == (not args.all):
-        print(
-            "Pass either an index or --all (not both, not neither).",
-            file=sys.stderr,
-        )
-        return 1
-
     job_records = manifest.get_job_ids(config.workspace)
     job_ids = [r["slurm_job_id"] for r in job_records]
     if not job_ids:
@@ -241,7 +234,7 @@ def cmd_stats(args):
     trials = manifest.load_manifest(config.workspace)
     trial_by_idx = {t["index"]: t for t in trials}
 
-    if args.all:
+    if args.index is None:
         rows = [
             (idx, trial_by_idx.get(idx, {}), by_index[idx])
             for idx in sorted(by_index)
@@ -782,8 +775,7 @@ def main():
     # stats — SLURM accounting (sacct)
     p_stats = subparsers.add_parser("stats", help="Print runtime/memory accounting from sacct")
     p_stats.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
-    p_stats.add_argument("index", nargs="?", type=int, default=None, help="Trial index (omit with --all)")
-    p_stats.add_argument("-a", "--all", action="store_true", help="Show stats for every trial with accounting data")
+    p_stats.add_argument("index", nargs="?", type=int, default=None, help="Trial index (omit to show every trial)")
 
     # test
     p_test = subparsers.add_parser("test", help="Validate Hydra config by running a trial with --cfg job")

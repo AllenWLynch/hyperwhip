@@ -60,15 +60,15 @@ class TestCmdStats(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def _args(self, **kw):
-        base = dict(workspace=self.tmp, index=None, all=False)
+        base = dict(workspace=self.tmp, index=None)
         base.update(kw)
         return argparse.Namespace(**base)
 
-    def test_all_prints_table(self):
+    def test_no_index_prints_all(self):
         with mock.patch(
             "hyperherd.cli.slurm.query_job_stats", return_value=self.fake_stats
         ):
-            rc = cmd_stats(self._args(all=True))
+            rc = cmd_stats(self._args())
         self.assertEqual(rc, 0)
 
     def test_single_index(self):
@@ -85,19 +85,10 @@ class TestCmdStats(unittest.TestCase):
             rc = cmd_stats(self._args(index=99))
         self.assertEqual(rc, 1)
 
-    def test_neither_index_nor_all(self):
-        rc = cmd_stats(self._args())
-        self.assertEqual(rc, 1)
-
-    def test_both_index_and_all(self):
-        rc = cmd_stats(self._args(index=0, all=True))
-        self.assertEqual(rc, 1)
-
     def test_no_jobs_recorded(self):
         # Workspace exists but no SLURM submission has been made yet.
-        # Wipe the job_ids file and re-test.
         os.remove(manifest.job_ids_path(self.tmp))
-        rc = cmd_stats(self._args(all=True))
+        rc = cmd_stats(self._args())
         self.assertEqual(rc, 1)
 
 
