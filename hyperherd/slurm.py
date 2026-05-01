@@ -1,5 +1,6 @@
 """SLURM interaction: sbatch submission, status queries, job cancellation."""
 
+import dataclasses
 import os
 import re
 import subprocess
@@ -41,6 +42,9 @@ def generate_sbatch_script(
     lines.extend([
         f"#SBATCH --output={log_dir}/%a.out",
         f"#SBATCH --error={log_dir}/%a.err",
+        # Append on resubmission so a trial's full history is preserved.
+        # The divider below makes each run easy to find in the file.
+        "#SBATCH --open-mode=append",
     ])
 
     for arg in config.slurm.extra_args:
@@ -53,6 +57,12 @@ def generate_sbatch_script(
         static_flag = f' --static "{escaped}"'
 
     lines.extend([
+        "",
+        "# Run divider — visible in both stdout and stderr after append",
+        '_HH_DIVIDER="==== HyperHerd run: job ${SLURM_JOB_ID} '
+        'array-task ${SLURM_ARRAY_TASK_ID} $(date -Iseconds) ===="',
+        'printf "\\n%s\\n\\n" "$_HH_DIVIDER"',
+        'printf "\\n%s\\n\\n" "$_HH_DIVIDER" >&2',
         "",
         "# Export HyperHerd environment variables",
         f'export HYPERHERD_WORKSPACE="{config.workspace}"',
@@ -140,16 +150,37 @@ def query_job_status(job_ids: List[str]) -> Dict[Tuple[str, int], str]:
     Returns a dict of (job_id, array_index) -> status string.
     Status values: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, TIMEOUT, etc.
     """
+    return {k: v.state for k, v in query_job_stats(job_ids).items()}
+
+
+@dataclasses.dataclass
+class JobStats:
+    """Accounting info for one array-task, fused across the parent + .batch step rows."""
+    state: str = "UNKNOWN"
+    elapsed: str = ""
+    max_rss: str = ""        # peak resident memory (e.g. '1234K', '2.3G')
+    ave_rss: str = ""
+    req_mem: str = ""
+    max_vm: str = ""
+
+
+def query_job_stats(job_ids: List[str]) -> Dict[Tuple[str, int], JobStats]:
+    """Query SLURM accounting for state + memory/runtime stats per array-task.
+
+    sacct returns one row for the parent (`12345_0`) carrying State/Elapsed,
+    and a separate row for the batch step (`12345_0.batch`) carrying
+    MaxRSS/AveRSS/MaxVMSize. We fuse both into one JobStats record per
+    (jid, idx).
+    """
     if not job_ids:
         return {}
 
     job_spec = ",".join(job_ids)
-
     result = subprocess.run(
         [
             "sacct",
             "-j", job_spec,
-            "--format=JobID,State,Elapsed",
+            "--format=JobID,State,Elapsed,MaxRSS,AveRSS,ReqMem,MaxVMSize",
             "--noheader",
             "--parsable2",
         ],
@@ -158,11 +189,10 @@ def query_job_status(job_ids: List[str]) -> Dict[Tuple[str, int], str]:
     )
 
     if result.returncode != 0:
-        # sacct might not be available or jobs might have aged out
-        # Fall back to squeue for running/pending jobs
-        return _query_squeue(job_ids)
+        # sacct unavailable; degrade to squeue (state only).
+        return {k: JobStats(state=v) for k, v in _query_squeue(job_ids).items()}
 
-    statuses = {}
+    stats: Dict[Tuple[str, int], JobStats] = {}
     for line in result.stdout.strip().split("\n"):
         if not line:
             continue
@@ -170,24 +200,44 @@ def query_job_status(job_ids: List[str]) -> Dict[Tuple[str, int], str]:
         if len(parts) < 2:
             continue
         job_id_str = parts[0]
-        state = parts[1].split()[0] if parts[1] else "UNKNOWN"  # strip trailing text
+        state = parts[1].split()[0] if parts[1] else "UNKNOWN"
+        elapsed = parts[2] if len(parts) > 2 else ""
+        max_rss = parts[3] if len(parts) > 3 else ""
+        ave_rss = parts[4] if len(parts) > 4 else ""
+        req_mem = parts[5] if len(parts) > 5 else ""
+        max_vm = parts[6] if len(parts) > 6 else ""
 
-        # Parse "12345_0" format (individual job array tasks)
+        # Parent row: "12345_0"
         match = re.match(r"(\d+)_(\d+)$", job_id_str)
         if match:
-            jid = match.group(1)
-            array_idx = int(match.group(2))
-            statuses[(jid, array_idx)] = state
+            key = (match.group(1), int(match.group(2)))
+            entry = stats.setdefault(key, JobStats())
+            entry.state = state
+            entry.elapsed = elapsed or entry.elapsed
+            entry.req_mem = req_mem or entry.req_mem
             continue
 
-        # Parse "12345_[0-10]" compact range format (e.g. cancelled before running)
+        # Step row: "12345_0.batch" (carries memory stats)
+        match = re.match(r"(\d+)_(\d+)\.batch$", job_id_str)
+        if match:
+            key = (match.group(1), int(match.group(2)))
+            entry = stats.setdefault(key, JobStats())
+            if max_rss:
+                entry.max_rss = max_rss
+            if ave_rss:
+                entry.ave_rss = ave_rss
+            if max_vm:
+                entry.max_vm = max_vm
+            continue
+
+        # Compact range form: "12345_[0-10]" — cancelled before any task started.
         match = re.match(r"(\d+)_\[(.+)\]$", job_id_str)
         if match:
             jid = match.group(1)
             for idx in _parse_array_range(match.group(2)):
-                statuses[(jid, idx)] = state
+                stats.setdefault((jid, idx), JobStats()).state = state
 
-    return statuses
+    return stats
 
 
 def _parse_array_range(spec: str) -> List[int]:

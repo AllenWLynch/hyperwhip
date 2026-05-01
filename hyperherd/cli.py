@@ -7,7 +7,13 @@ import sys
 
 from hyperherd.config import ConfigError, load_config
 from hyperherd.constraints import apply_constraints
-from hyperherd.display import print_dry_run, print_launch_success, print_status_table, print_summary
+from hyperherd.display import (
+    print_dry_run,
+    print_launch_success,
+    print_stats_table,
+    print_status_table,
+    print_summary,
+)
 from hyperherd.init import scaffold
 from hyperherd.preflight import PreflightError, run_preflight
 from hyperherd.search import generate_combinations
@@ -192,6 +198,68 @@ def cmd_monitor(args):
 
     print_status_table(trials, log_tails)
     print_summary(trials)
+    return 0
+
+
+def cmd_stats(args):
+    """Print SLURM accounting (runtime, max/ave RSS, requested mem) per trial."""
+    config = load_config(args.workspace)
+
+    if not manifest.workspace_exists(config.workspace):
+        print("No workspace found. Run 'herd run' first.", file=sys.stderr)
+        return 1
+
+    if (args.index is None) == (not args.all):
+        print(
+            "Pass either an index or --all (not both, not neither).",
+            file=sys.stderr,
+        )
+        return 1
+
+    job_records = manifest.get_job_ids(config.workspace)
+    job_ids = [r["slurm_job_id"] for r in job_records]
+    if not job_ids:
+        print("No SLURM jobs recorded for this workspace.", file=sys.stderr)
+        return 1
+
+    try:
+        all_stats = slurm.query_job_stats(job_ids)
+    except Exception as e:
+        print(f"Could not query SLURM accounting: {e}", file=sys.stderr)
+        return 1
+
+    # Pick the most recent JobStats record per index (a trial may have been
+    # resubmitted). Records are processed in submission order.
+    by_index = {}
+    for record in job_records:
+        jid = record["slurm_job_id"]
+        for idx in record.get("indices", []):
+            stats = all_stats.get((jid, idx))
+            if stats is not None:
+                by_index[idx] = stats
+
+    trials = manifest.load_manifest(config.workspace)
+    trial_by_idx = {t["index"]: t for t in trials}
+
+    if args.all:
+        rows = [
+            (idx, trial_by_idx.get(idx, {}), by_index[idx])
+            for idx in sorted(by_index)
+        ]
+        if not rows:
+            print("No accounting data available.")
+            return 0
+        print_stats_table(rows)
+        return 0
+
+    idx = args.index
+    if idx not in trial_by_idx:
+        print(f"No trial found with index {idx}.", file=sys.stderr)
+        return 1
+    if idx not in by_index:
+        print(f"No SLURM accounting data for trial {idx}.", file=sys.stderr)
+        return 1
+    print_stats_table([(idx, trial_by_idx[idx], by_index[idx])])
     return 0
 
 
@@ -463,42 +531,72 @@ def cmd_results(args):
     return 0
 
 
+_LIVE_STATUSES = ("running", "queued", "submitted")
+
+
+def _latest_job_id_for(records, index: int):
+    """Return the most recent SLURM job_id that included this index, or None."""
+    for record in reversed(records):
+        if index in record.get("indices", []):
+            return record["slurm_job_id"]
+    return None
+
+
 def cmd_stop(args):
-    """Cancel a single running/queued trial via scancel <jobid>_<index>."""
+    """Cancel one or all running/queued trials via scancel <jobid>_<index>."""
     config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
         print("No workspace found.", file=sys.stderr)
         return 1
 
+    if (args.index is None) == (not args.all):
+        print(
+            "Pass either an index or --all (not both, not neither).",
+            file=sys.stderr,
+        )
+        return 1
+
     _sync_slurm_status(config.workspace)
+    trials = manifest.load_manifest(config.workspace)
+    records = manifest.get_job_ids(config.workspace)
+
+    if args.all:
+        targets = [t for t in trials if t.get("status") in _LIVE_STATUSES]
+        if not targets:
+            print("No live trials to cancel.")
+            return 0
+        cancelled = []
+        for t in targets:
+            jid = _latest_job_id_for(records, t["index"])
+            if jid is None:
+                continue
+            slurm.cancel_array_task(jid, t["index"])
+            cancelled.append(t["index"])
+        if cancelled:
+            manifest.bulk_update_status(
+                config.workspace, {i: "cancelled" for i in cancelled}
+            )
+        print(f"Cancelled {len(cancelled)} trial(s): {sorted(cancelled)}")
+        return 0
 
     index = args.index
-    trials = manifest.load_manifest(config.workspace)
     trial = next((t for t in trials if t["index"] == index), None)
     if trial is None:
         print(f"No trial found with index {index}.", file=sys.stderr)
         return 1
 
     status = trial.get("status", "unknown")
-    if status not in ("running", "queued", "submitted"):
+    if status not in _LIVE_STATUSES:
         print(
             f"Trial {index} is {status!r}, not running/queued — nothing to cancel.",
             file=sys.stderr,
         )
         return 1
 
-    # Find the most recent submission that included this index.
-    job_id = None
-    for record in reversed(manifest.get_job_ids(config.workspace)):
-        if index in record.get("indices", []):
-            job_id = record["slurm_job_id"]
-            break
-
+    job_id = _latest_job_id_for(records, index)
     if job_id is None:
-        print(
-            f"No SLURM job ID recorded for trial {index}.", file=sys.stderr
-        )
+        print(f"No SLURM job ID recorded for trial {index}.", file=sys.stderr)
         return 1
 
     print(f"Cancelling trial {index} (job {job_id}_{index})...")
@@ -681,6 +779,12 @@ def main():
     p_monitor = subparsers.add_parser("status", help="Show status of all trials")
     p_monitor.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
 
+    # stats — SLURM accounting (sacct)
+    p_stats = subparsers.add_parser("stats", help="Print runtime/memory accounting from sacct")
+    p_stats.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
+    p_stats.add_argument("index", nargs="?", type=int, default=None, help="Trial index (omit with --all)")
+    p_stats.add_argument("-a", "--all", action="store_true", help="Show stats for every trial with accounting data")
+
     # test
     p_test = subparsers.add_parser("test", help="Validate Hydra config by running a trial with --cfg job")
     p_test.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
@@ -702,9 +806,10 @@ def main():
     p_results.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
 
     # stop
-    p_stop = subparsers.add_parser("stop", help="Cancel a single running/queued trial")
+    p_stop = subparsers.add_parser("stop", help="Cancel a running/queued trial (or all of them)")
     p_stop.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
-    p_stop.add_argument("index", type=int, help="Trial index to cancel")
+    p_stop.add_argument("index", nargs="?", type=int, default=None, help="Trial index to cancel")
+    p_stop.add_argument("-a", "--all", action="store_true", help="Cancel every running/queued trial in the workspace")
 
     # clean
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
@@ -731,6 +836,7 @@ def main():
         "test": cmd_test,
         "local": cmd_local,
         "status": cmd_monitor,
+        "stats": cmd_stats,
         "tail": cmd_tail,
         "res": cmd_results,
         "stop": cmd_stop,

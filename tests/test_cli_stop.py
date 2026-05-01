@@ -49,8 +49,8 @@ class TestCmdStop(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
 
-    def _args(self, index):
-        return argparse.Namespace(workspace=self.tmpdir, index=index)
+    def _args(self, index, all=False):
+        return argparse.Namespace(workspace=self.tmpdir, index=index, all=all)
 
     def test_no_workspace(self):
         # Wipe the workspace dir to simulate a fresh project.
@@ -114,6 +114,45 @@ class TestCmdStop(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         cancel.assert_called_once_with("67890", 0)
+
+    def test_all_cancels_only_live_trials(self):
+        # Mix of statuses: 0 running, 1 completed, plus ready ones from setUp.
+        manifest.bulk_update_status(self.tmpdir, {0: "running", 1: "completed"})
+        manifest.record_job_submission(self.tmpdir, "12345", [0, 1])
+
+        with mock.patch("hyperherd.cli.slurm.cancel_array_task") as cancel, \
+             mock.patch("hyperherd.cli._sync_slurm_status"):
+            rc = cmd_stop(self._args(None, all=True))
+
+        self.assertEqual(rc, 0)
+        cancel.assert_called_once_with("12345", 0)
+        trials = manifest.load_manifest(self.tmpdir)
+        by_idx = {t["index"]: t["status"] for t in trials}
+        self.assertEqual(by_idx[0], "cancelled")
+        self.assertEqual(by_idx[1], "completed")  # untouched
+
+    def test_all_no_live_trials(self):
+        # Everything completed/failed already — nothing to do.
+        manifest.bulk_update_status(self.tmpdir, {0: "completed", 1: "failed"})
+        with mock.patch("hyperherd.cli.slurm.cancel_array_task") as cancel, \
+             mock.patch("hyperherd.cli._sync_slurm_status"):
+            rc = cmd_stop(self._args(None, all=True))
+        self.assertEqual(rc, 0)
+        cancel.assert_not_called()
+
+    def test_neither_index_nor_all_errors(self):
+        with mock.patch("hyperherd.cli.slurm.cancel_array_task") as cancel, \
+             mock.patch("hyperherd.cli._sync_slurm_status"):
+            rc = cmd_stop(self._args(None, all=False))
+        self.assertEqual(rc, 1)
+        cancel.assert_not_called()
+
+    def test_both_index_and_all_errors(self):
+        with mock.patch("hyperherd.cli.slurm.cancel_array_task") as cancel, \
+             mock.patch("hyperherd.cli._sync_slurm_status"):
+            rc = cmd_stop(self._args(0, all=True))
+        self.assertEqual(rc, 1)
+        cancel.assert_not_called()
 
     def test_cancels_queued_trial(self):
         manifest.bulk_update_status(self.tmpdir, {0: "queued"})

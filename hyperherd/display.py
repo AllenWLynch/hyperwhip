@@ -193,6 +193,48 @@ def print_dry_run(
         print()
 
 
+def print_stats_table(rows) -> None:
+    """Print a per-trial table of runtime + memory accounting from sacct.
+
+    `rows` is an iterable of (index, trial_dict, JobStats).
+    """
+    rows = list(rows)
+    if not rows:
+        return
+
+    headers = ["idx", "state", "elapsed", "max_rss", "ave_rss", "req_mem", "name"]
+    table = [
+        [
+            str(idx),
+            st.state or "-",
+            st.elapsed or "-",
+            st.max_rss or "-",
+            st.ave_rss or "-",
+            st.req_mem or "-",
+            trial.get("experiment_name", ""),
+        ]
+        for idx, trial, st in rows
+    ]
+    widths = [max(len(h), max(len(r[i]) for r in table)) for i, h in enumerate(headers)]
+
+    def _join(cells):
+        return "  ".join(c.ljust(w) for c, w in zip(cells, widths))
+
+    print(f"{_BOLD}{_join(headers)}{_RESET}")
+    print(f"{_DIM}{'  '.join('-' * w for w in widths)}{_RESET}")
+    for cells in table:
+        line = _join(cells)
+        color = _STATUS_COLORS.get(cells[1].upper(), "")
+        if color:
+            # Recolor the state cell in-place; widths already padded above.
+            line = line.replace(
+                cells[1].ljust(widths[1]),
+                f"{color}{cells[1].ljust(widths[1])}{_RESET}",
+                1,
+            )
+        print(line)
+
+
 def print_launch_success(
     job_id: str,
     n_trials: int,
