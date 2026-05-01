@@ -3,11 +3,19 @@
 import dataclasses
 import os
 import re
+import shlex
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
 from hyperherd.config import Config
 from hyperherd import manifest
+
+
+# Bound on SLURM client calls. sacct/squeue/scancel are normally near-instant,
+# but a sick controller can hang indefinitely — `herd status` shouldn't block
+# the user's terminal forever in that case. 30s is generous for a healthy
+# cluster and short enough to surface controller problems quickly.
+_SLURM_TIMEOUT_S = 30
 
 
 def generate_sbatch_script(
@@ -50,11 +58,12 @@ def generate_sbatch_script(
     for arg in config.slurm.extra_args:
         lines.append(f"#SBATCH {arg}")
 
-    # Build static overrides for the resolve command
-    static_flag = ""
-    if config.hydra.static_overrides:
-        escaped = " ".join(config.hydra.static_overrides)
-        static_flag = f' --static "{escaped}"'
+    # Bake the per-trial lookup table into the script so the compute node
+    # doesn't need `hyperherd` (or any Python) installed. The override string
+    # and experiment name are frozen at submission time — re-running `herd
+    # run` regenerates the script and re-bakes the table.
+    static = config.static_overrides or None
+    case_block = _build_lookup_case(config.workspace, indices, static)
 
     lines.extend([
         "",
@@ -65,20 +74,58 @@ def generate_sbatch_script(
         'printf "\\n%s\\n\\n" "$_HH_DIVIDER" >&2',
         "",
         "# Export HyperHerd environment variables",
-        f'export HYPERHERD_WORKSPACE="{config.workspace}"',
-        "export HYPERHERD_TRIAL_ID=\"$SLURM_ARRAY_TASK_ID\"",
-        f'export HYPERHERD_EXPERIMENT_NAME=$(python -m hyperherd resolve-name '
-        f'"{ws}/{manifest.MANIFEST_FILE}" "$SLURM_ARRAY_TASK_ID")',
+        f"export HYPERHERD_WORKSPACE={shlex.quote(config.workspace)}",
+        'export HYPERHERD_TRIAL_ID="$SLURM_ARRAY_TASK_ID"',
         "",
-        "# Resolve Hydra overrides for this array task (includes experiment_name=...)",
-        f'OVERRIDES=$(python -m hyperherd resolve-overrides "{ws}/{manifest.MANIFEST_FILE}" '
-        f'"$SLURM_ARRAY_TASK_ID"{static_flag})',
+        "# Per-trial lookup baked at submission time (no Python required here).",
+        case_block,
         "",
         "# Invoke the user's launcher script",
-        f'bash "{config.launcher}" "$OVERRIDES"',
+        f"bash {shlex.quote(config.launcher)} \"$OVERRIDES\"",
     ])
 
     return "\n".join(lines) + "\n"
+
+
+def _build_lookup_case(
+    workspace: str, indices: List[int], static_overrides: Optional[List[str]]
+) -> str:
+    """Render a bash `case` statement that sets HYPERHERD_EXPERIMENT_NAME and
+    OVERRIDES for each pending array index.
+
+    Resolves both at submission time using the manifest. Values are
+    single-quoted for the shell so awkward `static_overrides` (paths with
+    spaces, embedded single quotes, etc.) are safe.
+    """
+    parts = ['case "$SLURM_ARRAY_TASK_ID" in']
+    trials_by_idx = {t["index"]: t for t in manifest.load_manifest(workspace)}
+
+    for idx in sorted(set(indices)):
+        trial = trials_by_idx.get(idx)
+        if trial is None:
+            # Submitting an index that isn't in the manifest is a programmer
+            # error — surface it loudly rather than emitting a silent gap.
+            raise ValueError(
+                f"Index {idx} requested for submission but not present in "
+                f"manifest at {workspace}"
+            )
+        exp_name = trial.get("experiment_name", "")
+        overrides = manifest.resolve_overrides(workspace, idx, static_overrides)
+        parts.append(f"  {idx})")
+        parts.append(f"    HYPERHERD_EXPERIMENT_NAME={shlex.quote(exp_name)}")
+        parts.append(f"    OVERRIDES={shlex.quote(overrides)}")
+        parts.append("    ;;")
+
+    parts.append("  *)")
+    parts.append(
+        '    echo "HyperHerd: no lookup entry for SLURM_ARRAY_TASK_ID='
+        '$SLURM_ARRAY_TASK_ID" >&2'
+    )
+    parts.append("    exit 1")
+    parts.append("    ;;")
+    parts.append("esac")
+    parts.append("export HYPERHERD_EXPERIMENT_NAME")
+    return "\n".join(parts)
 
 
 def _indices_to_array_spec(indices: List[int]) -> str:
@@ -176,17 +223,23 @@ def query_job_stats(job_ids: List[str]) -> Dict[Tuple[str, int], JobStats]:
         return {}
 
     job_spec = ",".join(job_ids)
-    result = subprocess.run(
-        [
-            "sacct",
-            "-j", job_spec,
-            "--format=JobID,State,Elapsed,MaxRSS,AveRSS,ReqMem,MaxVMSize",
-            "--noheader",
-            "--parsable2",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "sacct",
+                "-j", job_spec,
+                "--format=JobID,State,Elapsed,MaxRSS,AveRSS,ReqMem,MaxVMSize",
+                "--noheader",
+                "--parsable2",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_SLURM_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        # Controller is unresponsive; fall through to the squeue path which
+        # has its own timeout and may still succeed for live jobs.
+        return {k: JobStats(state=v) for k, v in _query_squeue(job_ids).items()}
 
     if result.returncode != 0:
         # sacct unavailable; degrade to squeue (state only).
@@ -230,18 +283,30 @@ def query_job_stats(job_ids: List[str]) -> Dict[Tuple[str, int], JobStats]:
                 entry.max_vm = max_vm
             continue
 
-        # Compact range form: "12345_[0-10]" — cancelled before any task started.
+        # Compact range form: "12345_[0-10]" or "12345_[7-10%4]".
+        # Appears for tasks that have not yet been mapped to an individual
+        # SLURM task — either because the array was cancelled before any task
+        # started, or because the %N throttle is holding them back. Per-task
+        # rows (when present) are more authoritative, so don't clobber them.
         match = re.match(r"(\d+)_\[(.+)\]$", job_id_str)
         if match:
             jid = match.group(1)
             for idx in _parse_array_range(match.group(2)):
-                stats.setdefault((jid, idx), JobStats()).state = state
+                entry = stats.setdefault((jid, idx), JobStats())
+                if entry.state == "UNKNOWN":
+                    entry.state = state
 
     return stats
 
 
 def _parse_array_range(spec: str) -> List[int]:
-    """Parse a SLURM array range spec like '0-10' or '0-3,5,7-9' into indices."""
+    """Parse a SLURM array range spec like '0-10', '0-3,5,7-9', or '0-10%4' into indices.
+
+    The '%N' suffix is SLURM's concurrency throttle (max simultaneous tasks) and
+    appears on the parent record when a job was submitted with `--array=...%N`.
+    """
+    # Strip throttle suffix: '0-10%4' -> '0-10'
+    spec = spec.split("%", 1)[0]
     indices = []
     for part in spec.split(","):
         if "-" in part:
@@ -255,18 +320,22 @@ def _parse_array_range(spec: str) -> List[int]:
 def _query_squeue(job_ids: List[str]) -> Dict[Tuple[str, int], str]:
     """Fallback: query squeue for running/pending jobs."""
     job_spec = ",".join(job_ids)
-    result = subprocess.run(
-        [
-            "squeue",
-            "-j", job_spec,
-            "--format=%i %t",
-            "--noheader",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    statuses: Dict[Tuple[str, int], str] = {}
+    try:
+        result = subprocess.run(
+            [
+                "squeue",
+                "-j", job_spec,
+                "--format=%i %t",
+                "--noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_SLURM_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return statuses
 
-    statuses = {}
     if result.returncode != 0:
         return statuses
 
@@ -303,14 +372,28 @@ def cancel_jobs(job_ids: List[str]) -> None:
     if not job_ids:
         return
     for jid in job_ids:
-        subprocess.run(["scancel", jid], capture_output=True, text=True)
+        try:
+            subprocess.run(
+                ["scancel", jid],
+                capture_output=True,
+                text=True,
+                timeout=_SLURM_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def cancel_array_task(job_id: str, array_index: int) -> None:
     """Cancel a single task within a SLURM job array via scancel <jid>_<idx>."""
-    subprocess.run(
-        ["scancel", f"{job_id}_{array_index}"], capture_output=True, text=True
-    )
+    try:
+        subprocess.run(
+            ["scancel", f"{job_id}_{array_index}"],
+            capture_output=True,
+            text=True,
+            timeout=_SLURM_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def get_log_tail(base: str, index: int, lines: int = 1) -> str:

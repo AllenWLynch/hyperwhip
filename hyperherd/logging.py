@@ -1,20 +1,24 @@
-"""Lightweight result logging for HyperHerd trials.
+"""Runtime helpers for HyperHerd trials — called from within a launched job.
 
-Usage from within a training script:
+Two complementary helpers live here:
 
-    from hyperherd.logging import log_result
+  * `log_result(name, value)` — write a metric for the current trial. Results
+    accumulate in `.hyperherd/results/<trial_id>.json` and are surfaced by
+    `herd res`.
+  * `parse_overrides(arg_string=None)` — turn the launcher's `$1` argument
+    string ("lr=0.001 optimizer=adam ...") into a dict of Python values.
+    Useful as a lightweight argparse replacement when the trainer doesn't
+    use Hydra (and the launcher delegates to a Python program).
 
-    log_result("test_accuracy", 0.95)
-    log_result("test_loss", 0.12)
-    log_result("epochs_completed", 50)
-
-Results are written to .hyperherd/results/<trial_id>.json in the workspace.
-The workspace and trial ID are resolved from HYPERHERD_WORKSPACE and
-HYPERHERD_TRIAL_ID environment variables (set automatically by mush).
+Both rely on `HYPERHERD_WORKSPACE` / `HYPERHERD_TRIAL_ID` env vars (logging)
+and `sys.argv` (parsing), which the sbatch script and `herd test` both set
+up automatically.
 """
 
 import json
 import os
+import sys
+from typing import Any, Dict, Optional
 
 from hyperherd.manifest import WORKSPACE_DIR
 
@@ -89,3 +93,81 @@ def load_all_results(workspace: str) -> dict:
             with open(os.path.join(results_dir, fname), "r") as f:
                 all_results[trial_id] = json.load(f)
     return all_results
+
+
+def _coerce_token(token: str) -> Any:
+    """Convert a single override value-token to int/float/bool/None when possible.
+
+    Mirrors the format used by `manifest._format_override_value` so a
+    round-trip (Python value → override string → `parse_overrides`) lands on
+    the original type for the common cases: ints stay ints, floats stay
+    floats, bools/None survive. Anything that doesn't parse cleanly is
+    returned as-is, so string-valued params still come through unmodified.
+    """
+    if token == "null" or token == "None":
+        return None
+    if token == "true":
+        return True
+    if token == "false":
+        return False
+    # Try int when there's no decimal/exponent — keeps "10" as int(10),
+    # "1.0" as float(1.0), and "1e-3" as float(0.001).
+    if token and token.lstrip("+-").isdigit():
+        try:
+            return int(token)
+        except ValueError:
+            pass
+    try:
+        return float(token)
+    except ValueError:
+        return token
+
+
+def parse_overrides(arg_string: Optional[str] = None) -> Dict[str, Any]:
+    """Parse a HyperHerd override string into a dict of {name: value}.
+
+    The launcher script receives overrides as `$1`, a whitespace-separated
+    string of `name=value` tokens (e.g.
+    `"experiment_name=lr-0.001_opt-adam lr=0.001 optimizer=adam"`).
+
+    Pass that string in, or omit `arg_string` to read `sys.argv[1]`. Values
+    are coerced back to int/float/bool/None when they parse cleanly,
+    otherwise left as strings.
+
+    Hydra-style key prefixes (`+foo`, `++foo`, `~foo`) are left in the
+    returned key as-is — non-Hydra trainers won't be emitting them, and
+    Hydra trainers use the override string directly anyway.
+
+    Example use from a non-Hydra trainer's `launch.sh`:
+
+        # launch.sh
+        python train.py "$1"
+
+        # train.py
+        from hyperherd import parse_overrides, log_result
+        params = parse_overrides()
+        lr = params["lr"]
+        ...
+        log_result("test_accuracy", acc)
+    """
+    if arg_string is None:
+        if len(sys.argv) < 2:
+            raise RuntimeError(
+                "parse_overrides() called with no argument and sys.argv[1] "
+                "is missing. Make sure your launcher forwards the override "
+                "string, e.g. `python train.py \"$1\"`."
+            )
+        arg_string = sys.argv[1]
+
+    result: Dict[str, Any] = {}
+    for token in arg_string.split():
+        if "=" not in token:
+            # Plain flags (e.g. `--cfg` `job` from `herd test --cfg-job`) are
+            # not name=value pairs; ignore rather than raise so the same
+            # parser can be used for cfg-job invocations too.
+            continue
+        key, _, value = token.partition("=")
+        if not key:
+            continue
+        result[key] = _coerce_token(value)
+    return result

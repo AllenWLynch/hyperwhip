@@ -17,54 +17,13 @@ class TestScaffold(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def test_creates_files(self):
-        config_path, launcher_path = scaffold(self.tmpdir, name="test_exp")
+        config_path, launcher_path = scaffold(self.tmpdir)
         self.assertTrue(os.path.isfile(config_path))
         self.assertTrue(os.path.isfile(launcher_path))
         self.assertTrue(config_path.endswith("hyperherd.yaml"))
         self.assertTrue(launcher_path.endswith("launch.sh"))
 
-    def test_config_contains_name(self):
-        scaffold(self.tmpdir, name="my_sweep")
-        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
-            content = f.read()
-        self.assertIn("name: my_sweep", content)
-
-    def test_config_contains_grid(self):
-        scaffold(self.tmpdir, name="test", grid="all")
-        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
-            content = f.read()
-        self.assertIn("grid: all", content)
-
-    def test_config_contains_gres(self):
-        scaffold(self.tmpdir, name="test", gres="gpu:1")
-        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
-            content = f.read()
-        self.assertIn('gres: "gpu:1"', content)
-
-    def test_launcher_is_executable(self):
-        _, launcher_path = scaffold(self.tmpdir, name="test")
-        mode = os.stat(launcher_path).st_mode
-        self.assertTrue(mode & stat.S_IEXEC)
-
-    def test_launcher_contains_default_command(self):
-        scaffold(self.tmpdir, name="test")
-        with open(os.path.join(self.tmpdir, "launch.sh")) as f:
-            content = f.read()
-        self.assertIn("python train.py $OVERRIDES", content)
-
-    def test_refuses_overwrite_by_default(self):
-        scaffold(self.tmpdir, name="test")
-        with self.assertRaises(FileExistsError):
-            scaffold(self.tmpdir, name="test")
-
-    def test_force_overwrites(self):
-        scaffold(self.tmpdir, name="test")
-        scaffold(self.tmpdir, name="test_v2", overwrite=True)
-        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
-            content = f.read()
-        self.assertIn("name: test_v2", content)
-
-    def test_default_name_from_directory(self):
+    def test_name_derived_from_directory(self):
         subdir = os.path.join(self.tmpdir, "cool_experiment")
         os.makedirs(subdir)
         scaffold(subdir)
@@ -72,14 +31,46 @@ class TestScaffold(unittest.TestCase):
             content = f.read()
         self.assertIn("name: cool_experiment", content)
 
-    def test_custom_slurm_settings(self):
-        scaffold(self.tmpdir, name="test", partition="a100", time="12:00:00", mem="64G", cpus=8)
-        with open(os.path.join(self.tmpdir, "hyperherd.yaml")) as f:
+    def test_launcher_is_executable(self):
+        _, launcher_path = scaffold(self.tmpdir)
+        mode = os.stat(launcher_path).st_mode
+        self.assertTrue(mode & stat.S_IEXEC)
+
+    def test_launcher_contains_default_command(self):
+        scaffold(self.tmpdir)
+        with open(os.path.join(self.tmpdir, "launch.sh")) as f:
             content = f.read()
-        self.assertIn("partition: a100", content)
-        self.assertIn('time: "12:00:00"', content)
-        self.assertIn('mem: "64G"', content)
-        self.assertIn("cpus_per_task: 8", content)
+        self.assertIn("python train.py $OVERRIDES", content)
+
+    def test_refuses_overwrite_by_default(self):
+        scaffold(self.tmpdir)
+        with self.assertRaises(FileExistsError):
+            scaffold(self.tmpdir)
+
+    def test_force_overwrites(self):
+        scaffold(self.tmpdir)
+        scaffold(self.tmpdir, overwrite=True)  # no error
+        self.assertTrue(os.path.isfile(os.path.join(self.tmpdir, "hyperherd.yaml")))
+
+    def test_from_config_copies_verbatim(self):
+        src = os.path.join(self.tmpdir, "src.yaml")
+        with open(src, "w") as f:
+            f.write("name: from_source\nparameters:\n  foo:\n    type: discrete\n    values: [1]\n")
+        dest = os.path.join(self.tmpdir, "dest")
+        scaffold(dest, from_config=src)
+        with open(os.path.join(dest, "hyperherd.yaml")) as f:
+            content = f.read()
+        self.assertIn("name: from_source", content)
+
+    def test_from_launcher_copies_verbatim(self):
+        src = os.path.join(self.tmpdir, "src_launch.sh")
+        with open(src, "w") as f:
+            f.write("#!/bin/bash\necho custom-launcher $1\n")
+        dest = os.path.join(self.tmpdir, "dest")
+        scaffold(dest, from_launcher=src)
+        with open(os.path.join(dest, "launch.sh")) as f:
+            content = f.read()
+        self.assertIn("custom-launcher", content)
 
 
 if __name__ == "__main__":

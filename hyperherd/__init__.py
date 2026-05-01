@@ -2,6 +2,6 @@
 
 __version__ = "0.1.0"
 
-from hyperherd.logging import log_result
+from hyperherd.logging import log_result, parse_overrides
 
-__all__ = ["log_result"]
+__all__ = ["log_result", "parse_overrides"]

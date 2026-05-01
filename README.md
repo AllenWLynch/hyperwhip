@@ -2,105 +2,40 @@
 
 Launch and monitor hyperparameter optimization job arrays on SLURM.
 
-HyperHerd takes a YAML configuration file describing your hyperparameter search space and submits it as a SLURM job array. Each array task runs one parameter combination through your training script via [Hydra](https://hydra.cc/) overrides. A user-provided launcher script handles container setup, environment modules, or any other runtime configuration.
+You write a YAML sweep config and a bash launcher script. HyperHerd generates a SLURM job array, hands each task a string of `name=value` overrides, and tracks state across resubmissions.
 
-**Scope.** HyperHerd is opinionated: it assumes (1) SLURM job arrays as the dispatch mechanism, (2) `key=value` Hydra-style overrides as the parameter contract, and (3) a bash launcher script as the integration point. Trainers that don't use Hydra still work — your `launch.sh` is the adapter that translates the override string into whatever flags your CLI expects.
+[Hydra](https://hydra.cc/) is the recommended trainer harness (its CLI consumes the override format directly), but the launcher is free-form bash — parse the arguments however you want.
 
-## Installation
+📖 **Full documentation: [allenwlynch.github.io/hyperwhip](https://allenwlynch.github.io/hyperwhip/)**
 
-### From source (recommended for development)
-
-```bash
-git clone <repo-url> && cd hyperherd
-pip install -e .
-```
-
-### From the repository directly
+## Quick start
 
 ```bash
-pip install git+<repo-url>
-```
+# Install
+pip install git+https://github.com/AllenWLynch/hyperwhip.git
 
-### Verify installation
+# Install the Claude Code skill for authoring sweep configs
+herd install-skill
 
-```bash
-herd --help
-```
+# Scaffold a workspace
+herd init my_experiment
 
-This should print the available subcommands: `init`, `run`, `test`, `status`, `tail`, `res`, `clean`.
-
-### Dependencies
-
-- Python >= 3.8
-- [PyYAML](https://pyyaml.org/) (installed automatically)
-- [Pydantic](https://docs.pydantic.dev/) >= 2.0 (installed automatically)
-- A SLURM cluster with `sbatch`, `sacct`, `squeue`, and `scancel` available on the submission host
-
-## Quick Start
-
-### 1. Scaffold a new experiment
-
-```bash
-herd init my_experiment --partition gpu --gres gpu:1
-```
-
-This creates `my_experiment/hyperherd.yaml` and `my_experiment/launch.sh` with sensible defaults. Edit both files to match your setup:
-
-- **hyperherd.yaml** — define your parameters, grid mode, SLURM resources, and conditions
-- **launch.sh** — set up your container, conda environment, or module loads
-
-### 2. Validate and preview
-
-```bash
-# Validate Hydra config for trial 0 (runs locally via launcher with --cfg job):
-herd test my_experiment
-
-# Preview the full sweep (no SLURM interaction, runs preflight checks):
-herd run my_experiment --dry-run
-```
-
-### 3. Launch
-
-```bash
-herd run my_experiment
-```
-
-### 4. Monitor
-
-```bash
-herd status my_experiment
-```
-
-### 5. Resubmit failures
-
-```bash
-# Re-running only resubmits pending/failed trials:
-herd run my_experiment
-```
-
-### 6. Collect results
-
-Log metrics from your training script:
-
-```python
-from hyperherd import log_result
-
-log_result("test_accuracy", 0.95)
-log_result("final_loss", 0.12)
-```
-
-Then print a TSV summary:
-
-```bash
-herd res my_experiment
-```
-
-### 7. Clean up
-
-```bash
-herd clean my_experiment --all
+# Edit my_experiment/hyperherd.yaml and my_experiment/launch.sh, then:
+herd run my_experiment --dry-run    # preview
+herd run my_experiment              # submit
+herd status my_experiment           # monitor
 ```
 
 ## Documentation
 
-See [docs/configuration.md](docs/configuration.md) for the full configuration reference, launcher script examples, constraint system, search mode details, and result logging API.
+- [Getting started](https://allenwlynch.github.io/hyperwhip/getting-started/) — install, scaffold, run your first sweep
+- [Sweep config reference](https://allenwlynch.github.io/hyperwhip/configuration/) — every field in `hyperherd.yaml`
+- [Conditions](https://allenwlynch.github.io/hyperwhip/conditions/) — filter or modify parameter combinations
+- [Launcher script](https://allenwlynch.github.io/hyperwhip/launcher/) — contract + examples (Apptainer, conda, non-Hydra)
+- [Command reference](https://allenwlynch.github.io/hyperwhip/commands/) — every `herd` subcommand
+- [Claude Code skill](https://allenwlynch.github.io/hyperwhip/claude-skill/) — authoring configs by asking Claude
+
+## Requirements
+
+- Python ≥ 3.8
+- SLURM cluster with `sbatch`, `sacct`, `squeue`, `scancel` on the submission host

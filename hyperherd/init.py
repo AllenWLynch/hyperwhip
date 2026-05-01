@@ -10,18 +10,24 @@ name: {name}
 #   grid: all          — grid over everything
 #   grid: [lr, wd]     — grid over lr and wd, hold others at defaults
 #   (omit grid)        — one-at-a-time from defaults
-{grid_line}
+grid: all
 
 slurm:
-  partition: {partition}
-  time: "{time}"
-  mem: "{mem}"
-  cpus_per_task: {cpus}
-{gres_line}
+  partition: default
+  time: "04:00:00"
+  mem: "8G"
+  cpus_per_task: 1
+  # gres: "gpu:1"          # uncomment for GPU jobs
+  # max_concurrent: 8      # cap simultaneously running array tasks
+
 launcher: ./launch.sh
 
-hydra:
-{static_overrides_block}
+# static_overrides: extra tokens appended to every trial's argument string
+# (e.g. dataset paths, fixed Hydra flags). One entry per token; whitespace-
+# split when the launcher receives them.
+# static_overrides:
+#   - "data.path=/scratch/datasets"
+
 parameters:
 {parameters_block}
 """
@@ -29,8 +35,8 @@ parameters:
 LAUNCHER_TEMPLATE = """\
 #!/bin/bash
 # launch.sh — Launcher script for HyperHerd
-# Receives Hydra overrides as $1. Modify this script to set up your
-# container, conda environment, modules, or any other runtime config.
+# Receives the name=value override string as $1. Modify this script to set up
+# your container, conda environment, modules, or any other runtime config.
 set -euo pipefail
 
 OVERRIDES="$1"
@@ -52,21 +58,15 @@ python train.py $OVERRIDES
 
 def scaffold(
     directory,
-    name=None,
-    grid="all",
-    partition="default",
-    time="04:00:00",
-    mem="8G",
-    cpus=1,
-    gres=None,
     overwrite=False,
     from_config=None,
     from_launcher=None,
 ):
     """Generate hyperherd.yaml and launch.sh in the given directory.
 
-    If from_config is given, copies that file instead of generating a template.
-    If from_launcher is given, copies that file instead of generating a template.
+    The generated files are templates with sensible defaults; edit the YAML to
+    set partition/time/mem/etc. If `from_config` or `from_launcher` is given,
+    that file is copied verbatim instead of generating a template.
 
     Returns (config_path, launcher_path).
     """
@@ -75,10 +75,7 @@ def scaffold(
     directory = os.path.abspath(directory)
     os.makedirs(directory, exist_ok=True)
 
-    if name is None:
-        name = os.path.basename(directory)
-        if not name or name == ".":
-            name = "experiment"
+    name = os.path.basename(directory) or "experiment"
 
     config_path = os.path.join(directory, "hyperherd.yaml")
     launcher_path = os.path.join(directory, "launch.sh")
@@ -97,25 +94,9 @@ def scaffold(
             raise FileNotFoundError(f"Config source not found: {src}")
         shutil.copy2(src, config_path)
     else:
-        gres_line = f'  gres: "{gres}"' if gres else "  # gres: \"gpu:1\"  # uncomment for GPU jobs"
-        grid_line = "grid: all" if grid == "all" else "# grid: all"
-
-        static_overrides_block = (
-            "  # static_overrides:\n"
-            "  #   - \"data.path=/scratch/datasets\"\n"
-        )
-        parameters_block = _build_example_parameters()
-
         config_content = CONFIG_TEMPLATE.format(
             name=name,
-            grid_line=grid_line,
-            partition=partition,
-            time=time,
-            mem=mem,
-            cpus=cpus,
-            gres_line=gres_line,
-            static_overrides_block=static_overrides_block,
-            parameters_block=parameters_block,
+            parameters_block=_build_example_parameters(),
         )
         with open(config_path, "w") as f:
             f.write(config_content)

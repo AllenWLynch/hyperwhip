@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from hyperherd.constraints import Trial
+from hyperherd.display import format_short_value
 
 
 WORKSPACE_DIR = ".hyperherd"
@@ -78,12 +79,7 @@ def build_experiment_name(
         label = None
         if labels is not None:
             label = labels.get(param_name, {}).get(value)
-        if label is not None:
-            token = label
-        elif isinstance(value, float):
-            token = f"{value:.4g}"
-        else:
-            token = str(value)
+        token = label if label is not None else format_short_value(value)
         parts.append(f"{abbr}-{token}")
     return "_".join(parts)
 
@@ -337,7 +333,7 @@ def resolve_overrides(
     Order (Hydra applies left-to-right, last wins):
       1. experiment_name=<name>
       2. swept parameter overrides
-      3. hydra.static_overrides
+      3. static_overrides
       4. constraint `set` extras (last → wins over statics)
     """
     trials = load_manifest(base)

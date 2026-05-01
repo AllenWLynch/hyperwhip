@@ -130,5 +130,26 @@ class TestOneAtATime(unittest.TestCase):
         self.assertEqual(len(combos), 3)
 
 
+class TestAbbrevDefault(unittest.TestCase):
+    """abbrev is optional and falls back to the parameter name."""
+
+    def test_omitted_abbrev_falls_back_to_param_name(self):
+        config = _make_config(
+            {
+                "lr": {"type": "discrete", "values": [0.1, 0.01]},
+                "wd": {"type": "continuous", "low": 1e-5, "high": 1e-3, "steps": 2},
+            },
+            grid="all",
+        )
+        self.assertEqual(config.abbrevs, {"lr": "lr", "wd": "wd"})
+
+    def test_explicit_abbrev_still_wins(self):
+        config = _make_config(
+            {"learning_rate": {"abbrev": "lr", "type": "discrete", "values": [0.1]}},
+            grid="all",
+        )
+        self.assertEqual(config.abbrevs, {"learning_rate": "lr"})
+
+
 if __name__ == "__main__":
     unittest.main()

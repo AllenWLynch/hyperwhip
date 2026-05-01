@@ -1,15 +1,23 @@
 """Parse and validate hyperherd YAML configuration files."""
 
 import os
+import re
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
+# Tokens used as filename components in `experiment_name` (and thus output
+# directory paths). Restrict to alphanumerics, dot, underscore, hyphen — the
+# intersection of "safe in a path" and "safe in a space-separated key=value
+# override string" across launchers.
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 class DiscreteParameter(BaseModel):
     type: Literal["discrete"]
-    abbrev: str
+    abbrev: Optional[str] = None
     values: List[Any] = Field(min_length=1)
     labels: Optional[List[str]] = None
     default: Optional[Any] = None
@@ -61,7 +69,7 @@ class DiscreteParameter(BaseModel):
 
 class ContinuousParameter(BaseModel):
     type: Literal["continuous"]
-    abbrev: str
+    abbrev: Optional[str] = None
     low: float
     high: float
     scale: Literal["linear", "log"] = "linear"
@@ -221,10 +229,6 @@ class SlurmConfig(BaseModel):
     extra_args: List[str] = Field(default_factory=list)
 
 
-class HydraConfig(BaseModel):
-    static_overrides: List[str] = Field(default_factory=list)
-
-
 class Config(BaseModel):
     name: str
     workspace: str = ""  # set by load_config from the config file's directory
@@ -236,7 +240,13 @@ class Config(BaseModel):
     grid: Optional[Union[Literal["all"], List[str]]] = None
 
     slurm: SlurmConfig = Field(default_factory=SlurmConfig)
-    hydra: HydraConfig = Field(default_factory=HydraConfig)
+
+    # Extra override tokens appended to every trial's argument string. The
+    # format is whatever the launcher expects — for Hydra trainers this is
+    # `key=value`; for a launcher that uses `parse_overrides()`, anything
+    # parseable by it. The string is split on whitespace by the shell when
+    # the sbatch script forwards it, so each entry should be one token.
+    static_overrides: List[str] = Field(default_factory=list)
     launcher: str = ""
 
     parameters: Dict[str, ParameterSpec] = Field(min_length=1)
@@ -244,6 +254,82 @@ class Config(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("conditions", "constraints"),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_hydra_static_overrides(cls, data):
+        """Lift `hydra.static_overrides` to top-level `static_overrides`.
+
+        The `hydra:` section was the historical home for static overrides
+        when the project assumed Hydra trainers exclusively. The field is
+        launcher-agnostic now, so it lives at the top level — but we keep
+        the old key working as a silent alias. If both are set, the
+        top-level one wins (and we ignore the nested one).
+        """
+        if not isinstance(data, dict):
+            return data
+        hydra = data.get("hydra")
+        if isinstance(hydra, dict) and "static_overrides" in hydra:
+            data.setdefault("static_overrides", hydra["static_overrides"])
+        # Drop the legacy section so pydantic doesn't reject it as an unknown field.
+        data.pop("hydra", None)
+        return data
+
+    @model_validator(mode="after")
+    def _validate_abbrev_safety(self):
+        """Each parameter's experiment-name token must be safe in a file path.
+
+        The token is the explicit `abbrev` if set, otherwise the parameter
+        name. Either way it ends up in `experiment_name` (e.g. `lr-0.001`),
+        which becomes a directory component for outputs/checkpoints. Reject
+        anything outside [A-Za-z0-9._-] — `/` would corrupt paths, whitespace
+        would corrupt the override string, `=` collides with the override
+        syntax, etc.
+        """
+        for name, spec in self.parameters.items():
+            if spec.abbrev is not None:
+                if not _SAFE_TOKEN_RE.match(spec.abbrev):
+                    raise ValueError(
+                        f"parameter '{name}': abbrev {spec.abbrev!r} contains "
+                        f"characters that would corrupt file paths or override "
+                        f"syntax; allowed characters are letters, digits, "
+                        f"'.', '_', '-'"
+                    )
+            else:
+                if not _SAFE_TOKEN_RE.match(name):
+                    raise ValueError(
+                        f"parameter name {name!r} contains characters unsafe "
+                        f"for filenames or override syntax (allowed: letters, "
+                        f"digits, '.', '_', '-'). Set an explicit `abbrev:` "
+                        f"on this parameter so the experiment name stays clean."
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_param_name_chars(self):
+        """Reject parameter names that would break override-string parsing.
+
+        Even with an abbrev set, the parameter name itself flows into the
+        override string as `name=value`, and the whole string is single-
+        quoted into the generated sbatch case block. Quotes / equals signs /
+        whitespace / shell metachars in names would corrupt either the
+        override format or its shell quoting.
+
+        Hydra-style `+foo`/`++foo`/`~foo` prefixes and dotted paths like
+        `model.lr` are intentionally permitted — those are normal in Hydra.
+        Filename-unsafe-but-otherwise-fine chars like `/` are caught earlier
+        by `_validate_abbrev_safety` (which fires when no abbrev is set).
+        """
+        forbidden = set("'\"`=\\\n\r\t ")
+        for name in self.parameters:
+            bad = sorted(set(name) & forbidden)
+            if bad:
+                raise ValueError(
+                    f"parameter name {name!r} contains forbidden characters "
+                    f"{bad}; these would break override-string parsing or "
+                    f"shell quoting"
+                )
+        return self
 
     @model_validator(mode="after")
     def _validate_grid_and_defaults(self):
@@ -341,7 +427,10 @@ class Config(BaseModel):
 
     @property
     def abbrevs(self) -> Dict[str, str]:
-        return {name: spec.abbrev for name, spec in self.parameters.items()}
+        return {
+            name: (spec.abbrev if spec.abbrev else name)
+            for name, spec in self.parameters.items()
+        }
 
     @property
     def labels(self) -> Dict[str, Dict[Any, str]]:

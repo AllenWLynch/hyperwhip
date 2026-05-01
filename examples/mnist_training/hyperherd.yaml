@@ -3,7 +3,7 @@ name: mnist_sweep
 grid: [learning_rate, optimizer]
 
 slurm:
-  partition: park
+  partition: park,short
   time: "01:00:00"
   mem: "4G"
   cpus_per_task: 1
@@ -12,11 +12,10 @@ slurm:
 
 launcher: ./launch.sh
 
-hydra:
-  static_overrides:
-    - "max_epochs=10"
-    - "data_dir=./data/mnist"
-    - "accelerator=auto"
+static_overrides:
+  - "max_epochs=10"
+  - "data_dir=./data/mnist"
+  - "accelerator=auto"
 
 parameters:
   learning_rate:

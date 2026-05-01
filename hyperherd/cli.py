@@ -8,6 +8,8 @@ import sys
 from hyperherd.config import ConfigError, load_config
 from hyperherd.constraints import apply_constraints
 from hyperherd.display import (
+    _DIM,
+    _RESET,
     print_dry_run,
     print_launch_success,
     print_stats_table,
@@ -278,9 +280,6 @@ def cmd_tail(args):
         print(f"No log files found for trial {index}", file=sys.stderr)
         return 1
 
-    _DIM = "\033[2m"
-    _RESET = "\033[0m"
-
     # Print trial info header
     trials = manifest.load_manifest(config.workspace)
     for t in trials:
@@ -313,84 +312,16 @@ def cmd_tail(args):
 
 
 def cmd_test(args):
-    """Run a single trial locally via the launcher script (no SLURM)."""
-    import subprocess
+    """Run a single trial locally via the launcher (no SLURM).
 
-    config = load_config(args.workspace)
+    The default invocation runs the trial end-to-end exactly as the SLURM
+    array would, and refuses any index that has ever been submitted to SLURM
+    (so the launcher's outputs/logs aren't clobbered).
 
-    # Preflight checks
-    try:
-        run_preflight(config)
-    except PreflightError as e:
-        print(f"Preflight check failed: {e}", file=sys.stderr)
-        return 1
-
-    # Generate combinations and ensure manifest exists
-    combinations = generate_combinations(config)
-    combinations = apply_constraints(combinations, config.conditions)
-
-    if not combinations:
-        print("No valid parameter combinations after applying conditions.", file=sys.stderr)
-        return 1
-
-    manifest.init_workspace(config.workspace)
-
-    if not manifest.workspace_exists(config.workspace):
-        abbrevs = config.abbrevs
-        manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
-
-    trials = manifest.load_manifest(config.workspace)
-
-    index = args.index
-    if index < 0 or index >= len(trials):
-        print(f"Trial index {index} out of range (0-{len(trials) - 1}).", file=sys.stderr)
-        return 1
-
-    trial = trials[index]
-    exp_name = trial.get("experiment_name", "")
-    overrides = manifest.resolve_overrides(
-        config.workspace, index, config.hydra.static_overrides or None
-    )
-
-    # Append --cfg job to validate Hydra config without running training
-    overrides_with_cfg = f"{overrides} --cfg job"
-
-    print(f"Validating Hydra config for trial {index}")
-    if exp_name:
-        print(f"  experiment_name: {exp_name}")
-    print(f"  overrides: {overrides}")
-    print(f"  launcher: {config.launcher}")
-    print(f"  (appending --cfg job for Hydra config validation)")
-    print("-" * 60)
-    print()
-
-    # Set env vars to match what the sbatch script would export
-    env = os.environ.copy()
-    env["HYPERHERD_WORKSPACE"] = config.workspace
-    env["HYPERHERD_TRIAL_ID"] = str(index)
-    env["HYPERHERD_EXPERIMENT_NAME"] = exp_name
-
-    result = subprocess.run(
-        ["bash", config.launcher, overrides_with_cfg],
-        cwd=config.workspace,
-        env=env,
-    )
-
-    print()
-    print("-" * 60)
-    if result.returncode == 0:
-        print(f"Trial {index}: Hydra config is valid.")
-    else:
-        print(f"Trial {index}: Hydra config validation failed (exit code {result.returncode}).")
-
-    return result.returncode
-
-
-def cmd_local(args):
-    """Run a single trial end-to-end locally via the launcher (no SLURM, no --cfg job).
-
-    Useful as a final pre-flight before `herd run`. Refuses any index that has
-    ever been submitted to SLURM, to avoid interfering with a real run's outputs.
+    With `--cfg-job`, appends `--cfg job` to the override string. Hydra
+    trainers interpret this as "print the resolved config and exit without
+    running" — useful as a quick config-validation step. In this mode no
+    real outputs are produced, so the previously-submitted guard is skipped.
     """
     import subprocess
 
@@ -421,25 +352,35 @@ def cmd_local(args):
         print(f"Trial index {index} out of range (0-{len(trials) - 1}).", file=sys.stderr)
         return 1
 
-    # Refuse if this index has ever been submitted to SLURM.
-    for record in manifest.get_job_ids(config.workspace):
-        if index in record.get("indices", []):
-            print(
-                f"Trial {index} was previously submitted to SLURM "
-                f"(job {record['slurm_job_id']}). Refusing to run locally — "
-                f"running would clobber its outputs/logs. Pick a different index "
-                f"or `herd clean --all` first.",
-                file=sys.stderr,
-            )
-            return 1
+    cfg_job = getattr(args, "cfg_job", False)
+
+    # End-to-end runs would clobber a trial that's already been launched.
+    # `--cfg-job` validates without running, so it's safe to skip.
+    if not cfg_job:
+        for record in manifest.get_job_ids(config.workspace):
+            if index in record.get("indices", []):
+                print(
+                    f"Trial {index} was previously submitted to SLURM "
+                    f"(job {record['slurm_job_id']}). Refusing to run locally — "
+                    f"running would clobber its outputs/logs. Pick a different "
+                    f"index, pass --cfg-job for a Hydra config-only check, or "
+                    f"`herd clean --all` first.",
+                    file=sys.stderr,
+                )
+                return 1
 
     trial = trials[index]
     exp_name = trial.get("experiment_name", "")
     overrides = manifest.resolve_overrides(
-        config.workspace, index, config.hydra.static_overrides or None
+        config.workspace, index, config.static_overrides or None
     )
+    if cfg_job:
+        overrides = f"{overrides} --cfg job"
 
-    print(f"Running trial {index} locally")
+    if cfg_job:
+        print(f"Validating Hydra config for trial {index}")
+    else:
+        print(f"Running trial {index} locally")
     if exp_name:
         print(f"  experiment_name: {exp_name}")
     print(f"  overrides: {overrides}")
@@ -461,9 +402,15 @@ def cmd_local(args):
     print()
     print("-" * 60)
     if result.returncode == 0:
-        print(f"Trial {index}: local run completed successfully.")
+        msg = "Hydra config is valid." if cfg_job else "local run completed successfully."
+        print(f"Trial {index}: {msg}")
     else:
-        print(f"Trial {index}: local run failed (exit code {result.returncode}).")
+        msg = (
+            "Hydra config validation failed"
+            if cfg_job
+            else "local run failed"
+        )
+        print(f"Trial {index}: {msg} (exit code {result.returncode}).")
 
     return result.returncode
 
@@ -636,13 +583,6 @@ def cmd_init(args):
     try:
         config_path, launcher_path = scaffold(
             directory=directory,
-            name=args.name,
-            grid=args.grid,
-            partition=args.partition,
-            time=args.time,
-            mem=args.mem,
-            cpus=args.cpus,
-            gres=args.gres,
             overwrite=args.force,
             from_config=args.config,
             from_launcher=args.launcher,
@@ -655,38 +595,58 @@ def cmd_init(args):
     print(f"Created {launcher_path}")
     print()
     print("Next steps:")
-    print("  1. Edit hyperherd.yaml to define your parameters")
+    print("  1. Edit hyperherd.yaml to define your parameters and SLURM resources")
     print("  2. Edit launch.sh to set up your container/environment")
-    print(f"  3. Run: hyperherd launch {directory} --dry-run")
+    print(f"  3. Run: herd run {directory} --dry-run")
     return 0
 
 
-def cmd_resolve_overrides(args):
-    """Internal subcommand: resolve Hydra overrides for a SLURM array task."""
-    manifest_file = args.manifest
-    task_id = int(args.task_id)
-
-    # Load manifest directly from the given path
-    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperherd/../
-    static = args.static.split() if args.static else None
-    overrides = manifest.resolve_overrides(base, task_id, static)
-    print(overrides)
-    return 0
+_SKILL_NAME = "hyperherd-config"
 
 
-def cmd_resolve_name(args):
-    """Internal subcommand: print the experiment_name for a SLURM array task."""
-    manifest_file = args.manifest
-    task_id = int(args.task_id)
+def _packaged_skill_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "skill", "SKILL.md")
 
-    base = os.path.dirname(os.path.dirname(manifest_file))  # .hyperherd/../
-    trials = manifest.load_manifest(base)
-    for t in trials:
-        if t["index"] == task_id:
-            print(t.get("experiment_name", ""))
+
+def cmd_install_skill(args):
+    """Install the hyperherd-config Claude Code skill into ~/.claude/skills/."""
+    src = _packaged_skill_path()
+    if not os.path.isfile(src):
+        print(
+            f"Error: packaged skill not found at {src}.\n"
+            "This usually means the install is broken — try `pip install -e .` "
+            "from a checkout, or reinstall the package.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.scope == "project":
+        base = os.path.abspath(".claude/skills")
+    else:
+        base = os.path.expanduser("~/.claude/skills")
+
+    dest_dir = os.path.join(base, _SKILL_NAME)
+    dest = os.path.join(dest_dir, "SKILL.md")
+
+    if os.path.exists(dest):
+        if os.path.realpath(dest) == os.path.realpath(src):
+            print(f"Skill already linked to packaged source at {dest} — nothing to do.")
             return 0
-    print(f"No trial found for task ID {task_id}", file=sys.stderr)
-    return 1
+        if not args.force:
+            print(
+                f"Skill already installed at {dest}. Use --force to overwrite.",
+                file=sys.stderr,
+            )
+            return 1
+
+    os.makedirs(dest_dir, exist_ok=True)
+    shutil.copyfile(src, dest)
+    print(f"Installed {_SKILL_NAME} skill to {dest}")
+    print(
+        "Open a new Claude Code session in any directory to use it — invoke by "
+        "asking Claude to author or edit a hyperherd.yaml."
+    )
+    return 0
 
 
 def _sync_slurm_status(workspace: str):
@@ -699,8 +659,12 @@ def _sync_slurm_status(workspace: str):
 
     try:
         statuses = slurm.query_job_status(job_ids)
-    except Exception:
-        # SLURM commands might not be available (e.g., local development)
+    except FileNotFoundError:
+        # sacct/squeue not on PATH (e.g., local development without SLURM).
+        return
+    except Exception as e:
+        # Surface parse/logic bugs instead of leaving statuses silently stale.
+        print(f"Warning: failed to sync SLURM status: {e}", file=sys.stderr)
         return
 
     # Map SLURM states to our status values
@@ -733,13 +697,6 @@ def main():
     # init
     p_init = subparsers.add_parser("init", help="Scaffold a new config and launcher script")
     p_init.add_argument("directory", nargs="?", default=".", help="Directory to create files in (default: current)")
-    p_init.add_argument("-N", "--name", default=None, help="Experiment name (default: directory name)")
-    p_init.add_argument("-g", "--grid", default="all", help="Grid mode: 'all' for full grid, or omit for one-at-a-time (default: all)")
-    p_init.add_argument("-p", "--partition", default="default", help="SLURM partition (default: 'default')")
-    p_init.add_argument("-t", "--time", default="04:00:00", help="Wall time limit (default: 04:00:00)")
-    p_init.add_argument("-m", "--mem", default="8G", help="Memory per node (default: 8G)")
-    p_init.add_argument("-c", "--cpus", type=int, default=1, help="CPUs per task (default: 1)")
-    p_init.add_argument("--gres", default=None, help="Generic resources (e.g. gpu:1)")
     p_init.add_argument("--config", default=None, help="Copy this file as hyperherd.yaml instead of generating a template")
     p_init.add_argument("--launcher", default=None, help="Copy this file as launch.sh instead of generating a template")
     p_init.add_argument("-f", "--force", action="store_true", help="Overwrite existing files")
@@ -777,15 +734,22 @@ def main():
     p_stats.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_stats.add_argument("index", nargs="?", type=int, default=None, help="Trial index (omit to show every trial)")
 
-    # test
-    p_test = subparsers.add_parser("test", help="Validate Hydra config by running a trial with --cfg job")
+    # test — run a single trial locally (with optional Hydra --cfg job validation)
+    p_test = subparsers.add_parser(
+        "test",
+        help="Run a single trial locally via the launcher (no SLURM)",
+    )
     p_test.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
-    p_test.add_argument("index", nargs="?", type=int, default=0, help="Trial index to test (default: 0)")
-
-    # local
-    p_local = subparsers.add_parser("local", help="Run a single trial end-to-end locally (no SLURM)")
-    p_local.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
-    p_local.add_argument("index", nargs="?", type=int, default=0, help="Trial index to run (default: 0)")
+    p_test.add_argument("index", nargs="?", type=int, default=0, help="Trial index to run (default: 0)")
+    p_test.add_argument(
+        "--cfg-job",
+        action="store_true",
+        help=(
+            "Append `--cfg job` to the override string. For Hydra trainers this "
+            "prints the resolved config and exits without running training "
+            "(safe to use on indices already submitted to SLURM)."
+        ),
+    )
 
     # tail
     p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log")
@@ -809,32 +773,49 @@ def main():
     p_clean.add_argument("-l", "--logs", action="store_true", help="Remove log files")
     p_clean.add_argument("-a", "--all", action="store_true", help="Remove entire .hyperherd state")
 
-    # Internal: resolve-overrides (called from within sbatch script)
-    p_resolve = subparsers.add_parser("resolve-overrides", help=argparse.SUPPRESS)
-    p_resolve.add_argument("manifest", help="Path to manifest.json")
-    p_resolve.add_argument("task_id", help="SLURM_ARRAY_TASK_ID")
-    p_resolve.add_argument("--static", default="", help="Static Hydra overrides")
-
-    # Internal: resolve-name (called from within sbatch script)
-    p_name = subparsers.add_parser("resolve-name", help=argparse.SUPPRESS)
-    p_name.add_argument("manifest", help="Path to manifest.json")
-    p_name.add_argument("task_id", help="SLURM_ARRAY_TASK_ID")
+    # install-skill
+    p_skill = subparsers.add_parser(
+        "install-skill",
+        help="Install the hyperherd-config Claude Code skill",
+    )
+    p_skill.add_argument(
+        "--scope",
+        choices=("user", "project"),
+        default="user",
+        help="user: ~/.claude/skills (default); project: ./.claude/skills",
+    )
+    p_skill.add_argument(
+        "-f", "--force", action="store_true", help="Overwrite an existing install",
+    )
 
     args = parser.parse_args()
+
+    # Disambiguate `<workspace?> <index?>` positionals when only one was given.
+    # `herd stop 5` from inside a workspace binds "5" to `workspace` because it
+    # comes first; if it looks like an int and isn't a directory, treat it as
+    # `index` instead. Affects: stop, stats, test.
+    if (
+        getattr(args, "index", "<missing>") is None
+        and isinstance(getattr(args, "workspace", None), str)
+        and not os.path.isdir(args.workspace)
+    ):
+        try:
+            args.index = int(args.workspace)
+            args.workspace = "."
+        except ValueError:
+            pass
 
     handlers = {
         "init": cmd_init,
         "run": cmd_launch,
         "test": cmd_test,
-        "local": cmd_local,
         "status": cmd_monitor,
         "stats": cmd_stats,
         "tail": cmd_tail,
         "res": cmd_results,
         "stop": cmd_stop,
         "clean": cmd_clean,
-        "resolve-overrides": cmd_resolve_overrides,
-        "resolve-name": cmd_resolve_name,
+        "install-skill": cmd_install_skill,
     }
 
     try:

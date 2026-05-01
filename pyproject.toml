@@ -11,5 +11,17 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = ["pyyaml", "pydantic>=2.0"]
 
+[project.optional-dependencies]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+]
+
 [project.scripts]
 herd = "hyperherd.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hyperherd*"]
+
+[tool.setuptools.package-data]
+hyperherd = ["skill/SKILL.md"]
