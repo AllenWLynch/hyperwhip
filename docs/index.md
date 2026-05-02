@@ -32,9 +32,10 @@ HyperHerd is opinionated. It assumes:
 
 <div class="grid cards" markdown>
 
+- **[Autonomous monitor](monitor.md)** — start here if you want the agent runner. Lifecycle, failure-triage policy, notifications.
 - **[Getting started](getting-started.md)** — install, scaffold, run your first sweep.
 - **[Sweep config reference](configuration.md)** — every field in `hyperherd.yaml`.
 - **[Command reference](commands.md)** — every `herd` subcommand.
-- **[Claude Code skill](claude-skill.md)** — generate configs by asking Claude.
+- **[Claude Code skills](claude-skill.md)** — generate configs by asking Claude; drive the monitor agent.
 
 </div>

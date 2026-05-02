@@ -89,7 +89,25 @@ herd status
 herd tail 3
 ```
 
-### 4. Monitor
+### 4. Hand it to the agent (recommended)
+
+For anything longer than a few minutes, let the [autonomous monitor](monitor.md) operate the sweep:
+
+```bash
+herd monitor
+```
+
+`herd monitor` spawns `herd watch` in the background, drops you into a Claude Code session running the [`hyperherd-monitor` skill](claude-skill.md), and walks you through a one-time setup interview (metric source, success metric, whether to auto-bump mem/time on failure). The agent then handles staged rollout, failure triage, and per-tick status messages on your phone — you walk away. Wrap in `tmux` to outlive your shell:
+
+```bash
+tmux new -s monitor 'herd monitor'
+```
+
+See the [Autonomous monitor](monitor.md) page for the full lifecycle, failure-triage policy, notification format, and troubleshooting.
+
+### 4b. Drive it manually (if you'd rather)
+
+If you don't want the agent in the loop, the same workspace can be operated by hand:
 
 ```bash
 herd status        # one-shot status table
@@ -132,16 +150,6 @@ herd res
 ```bash
 herd clean --all
 ```
-
-## Hands-off operation: `herd monitor`
-
-Steps 4–6 are the manual loop. If you'd rather hand the sweep over to an agent — staged rollout, automatic mem/time bumps when SLURM can fix it, real-time webhook alerts, and per-tick status messages on your phone — replace the manual monitoring with one command:
-
-```bash
-herd monitor
-```
-
-That spawns `herd watch` in the background, drops you into a Claude Code session running the [`hyperherd-monitor` skill](claude-skill.md), and walks you through a one-time setup interview (metric source, success metric, whether to auto-remediate failures). The agent then handles ramping, triage, and notifications until the sweep finishes. Wrap in `tmux` to keep it alive after logout. See [`herd monitor`](commands.md#herd-monitor) for the full lifecycle.
 
 ## Next steps
 
