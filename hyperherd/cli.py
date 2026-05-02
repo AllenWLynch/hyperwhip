@@ -995,6 +995,58 @@ def cmd_monitor(args):
         return 1
 
 
+def cmd_monitor_v2(args):
+    """Experimental: agent-SDK-based monitor daemon.
+
+    Phase-1 entrypoint. Supports `--once` (run a single tick and exit) and
+    `--dry-run` (assemble state and render the prompt without calling the
+    Anthropic API, for verifying the deterministic path).
+    """
+    import asyncio
+
+    workspace = args.workspace
+    if not manifest.workspace_exists(workspace):
+        print("No workspace found. Run 'herd run' (even just '--dry-run') "
+              "first so there's a manifest to monitor.", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        from hyperherd.monitor_agent import tick as tick_mod
+        try:
+            result = tick_mod.dry_run(workspace, trigger=args.trigger)
+        except Exception as e:
+            print(f"Dry run failed: {e}", file=sys.stderr)
+            return 1
+        print("=== System prompt ({} chars) ===".format(result["system_prompt_chars"]))
+        print("(skill markdown — not displayed; cached after first tick)")
+        print()
+        print("=== TickState ===")
+        print(json.dumps(result["state"], indent=2, default=str))
+        print()
+        print("=== User message (the per-tick turn) ===")
+        print(result["user_message"])
+        return 0
+
+    if not args.once:
+        print("herd monitor-v2 currently only supports --once or --dry-run "
+              "(daemon mode lands in a later phase).", file=sys.stderr)
+        return 1
+
+    from hyperherd.monitor_agent import tick as tick_mod
+    try:
+        result = asyncio.run(tick_mod.run_tick(workspace, trigger=args.trigger))
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Tick complete. cost=${result.cost_usd:.4f} turns={result.turns}")
+    if result.halted:
+        print(f"Agent halted: {result.halt_reason or '(no reason)'}")
+    elif result.next_delay_seconds is not None:
+        print(f"Next tick in {result.next_delay_seconds}s")
+    return 0
+
+
 def cmd_msg(args):
     """Post a free-text message to the watch webhook configured for this
     workspace (or its zero-config ntfy fallback). Lets you announce things
@@ -1407,6 +1459,29 @@ def main():
         help="Stop the background watch for this workspace and exit (does not touch Claude Code sessions)",
     )
 
+    # monitor-v2 — experimental: agent-SDK-based monitor (Phase 1 of PLAN.md).
+    p_mv2 = subparsers.add_parser(
+        "monitor-v2",
+        help="(experimental) Agent-SDK-based monitor — single-tick mode for now",
+    )
+    p_mv2.add_argument(
+        "workspace", nargs="?", default=".",
+        help="Workspace directory (default: current dir)",
+    )
+    p_mv2.add_argument(
+        "--once", action="store_true",
+        help="Run exactly one tick (live — calls Anthropic API)",
+    )
+    p_mv2.add_argument(
+        "--dry-run", action="store_true",
+        help="Assemble state + render the prompt; no API call. Use this to verify the deterministic path before paying for tokens.",
+    )
+    p_mv2.add_argument(
+        "--trigger", default="scheduled",
+        choices=["scheduled", "failure", "completion", "user_message", "boot"],
+        help="What kind of tick this is (affects how the agent reads the state)",
+    )
+
     # snapshot — bundled JSON for agent loops (status + stats + failed stderr)
     p_snapshot = subparsers.add_parser(
         "snapshot",
@@ -1496,6 +1571,7 @@ def main():
         "clean": cmd_clean,
         "watch": cmd_watch,
         "monitor": cmd_monitor,
+        "monitor-v2": cmd_monitor_v2,
         "snapshot": cmd_snapshot,
         "msg": cmd_msg,
         "install-skill": cmd_install_skill,

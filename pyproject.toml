@@ -16,6 +16,11 @@ docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.5",
 ]
+monitor = [
+    "claude-agent-sdk>=0.1",
+    "discord.py>=2.4",
+    "ruamel.yaml>=0.18",   # round-trips comments when we edit hyperherd.yaml
+]
 
 [project.scripts]
 herd = "hyperherd.cli:main"
@@ -24,4 +29,7 @@ herd = "hyperherd.cli:main"
 include = ["hyperherd*"]
 
 [tool.setuptools.package-data]
-hyperherd = ["skills/*/SKILL.md"]
+hyperherd = [
+    "skills/*/SKILL.md",
+    "monitor_agent/prompt/*.md",
+]
