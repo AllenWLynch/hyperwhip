@@ -1,6 +1,6 @@
 # HyperHerd
 
-**Hyperparameter sweeps on SLURM, run by an autonomous agent.** Declare your search in YAML, hand over a one-line launcher script, and walk away — `herd monitor` spawns a Claude Code agent that submits trials in stages, diagnoses failures, retries the ones SLURM can fix, and pings your phone only when it can't.
+**Hyperparameter sweeps on SLURM, run by an autonomous agent.** Declare your search in YAML, hand over a one-line launcher script, and walk away — `herd monitor` submits trials in stages, diagnoses failures, retries the ones SLURM can fix, and pings your phone only when it can't.
 
 📖 **Full documentation: [allenwlynch.github.io/hyperherd](https://allenwlynch.github.io/hyperherd/)**
 

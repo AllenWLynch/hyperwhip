@@ -91,19 +91,19 @@ herd tail 3
 
 ### 4. Hand it to the agent (recommended)
 
-For anything longer than a few minutes, let the [autonomous monitor](monitor.md) operate the sweep:
+For anything longer than a few minutes, let the [autonomous monitor](monitor.md) operate the sweep for you:
 
 ```bash
 herd monitor
 ```
 
-`herd monitor` spawns `herd watch` in the background, drops you into a Claude Code session running the [`hyperherd-monitor` skill](claude-skill.md), and walks you through a one-time setup interview (metric source, success metric, whether to auto-bump mem/time on failure). The agent then handles staged rollout, failure triage, and per-tick status messages on your phone — you walk away. Wrap in `tmux` to outlive your shell:
+The agent walks you through a short setup interview (metric source, success metric, whether to auto-bump mem/time on failure), then handles staged rollout, failure triage, and per-tick status messages on your phone — you walk away. Wrap in `tmux` to keep it running after you log out:
 
 ```bash
 tmux new -s monitor 'herd monitor'
 ```
 
-See the [Autonomous monitor](monitor.md) page for the full lifecycle, failure-triage policy, notification format, and troubleshooting.
+See [Autonomous monitor](monitor.md) for the full picture.
 
 ### 4b. Drive it manually (if you'd rather)
 

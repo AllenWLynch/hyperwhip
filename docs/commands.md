@@ -365,34 +365,20 @@ Shape:
 
 ## `herd monitor`
 
-Start the agent-driven sweep monitor: spawn `herd watch` in the background, print the prompt to paste into Claude Code, and `exec` `claude` so the user lands in an interactive session with the [`hyperherd-monitor` skill](claude-skill.md) ready to run.
+Hand the sweep to a Claude Code agent. See the [Autonomous monitor](monitor.md) page for the full picture; this is the command reference.
 
 ```bash
-herd monitor [WORKSPACE] [--no-watch]
+herd monitor [WORKSPACE] [--no-watch] [--no-auto-allow]
 herd monitor --stop
 ```
 
-The agent runs under **dynamic `/loop`** (no fixed cadence) and self-paces via `ScheduleWakeup` — short delays during canary rollout and right after activity (~3–5 min), longer delays once the sweep is steady-state running (~30–60 min). The cadence rules live in the `hyperherd-monitor` skill.
-
 | Flag | Description |
 |------|-------------|
-| `--no-watch` | Skip the background `herd watch` spawn (use if one is already running) |
-| `--no-auto-allow` | Don't write monitor allow-rules to `<workspace>/.claude/settings.local.json` (without these rules, Claude Code prompts before each tool call — defeats unattended operation) |
-| `--stop` | Kill the background `herd watch` for this workspace (does not touch Claude Code sessions — those die with their terminal) |
+| `--no-watch` | Don't start `herd watch` (use if one is already running for this workspace) |
+| `--no-auto-allow` | Require interactive permission approval for every agent tool call (defeats unattended operation) |
+| `--stop` | Stop the background `herd watch` for this workspace |
 
-What happens, in order:
-
-1. `herd watch` is spawned in the background with `nohup`-style detach: pidfile at `.hyperherd/watch.pid`, log at `.hyperherd/watch.log`. If a watch is already running for this workspace, the second start is skipped with a note.
-2. Project-scope `.claude/settings.local.json` is updated with allow-rules covering the agent's tool surface (`Bash(herd *)`, edits to `hyperherd.yaml`, reads/writes under `.hyperherd/`). Existing unrelated entries are preserved; entries already present are deduped. Skip with `--no-auto-allow`.
-3. The initial prompt (`Use the hyperherd-monitor skill to manage the sweep at <workspace>… /loop` (dynamic, self-pacing via `ScheduleWakeup`)) is written to `.hyperherd/monitor-prompt.txt` as an audit trail.
-4. `herd monitor` `exec`s `claude "<prompt>"` — an interactive Claude Code session that's already executing the prompt as its first user turn. No paste step. The skill takes over from there: setup interview, phased rollout, per-tick monitoring with adaptive cadence.
-5. When you close your terminal, Claude Code exits — but `herd watch` keeps running in the background. To detach without losing the Claude session, wrap the whole thing in `tmux new -s monitor 'herd monitor'`.
-
-To shut everything down, run `herd monitor --stop` (kills `watch`); the Claude session is already gone if you closed its terminal.
-
-The auto-allow rules are scoped to **this workspace only** and only cover `herd` subcommands, the workspace's `hyperherd.yaml`, and files under `.hyperherd/`. If you'd rather grant permissions interactively, pass `--no-auto-allow` — but expect to approve a tool call every few minutes as the agent ticks.
-
-If `claude` isn't on PATH, `herd monitor` prints the prompt and exits with an error — you can still paste the prompt into an existing Claude Code session manually.
+Wrap in tmux to outlive your shell: `tmux new -s monitor 'herd monitor'`. Stop everything with `herd monitor --stop`.
 
 ## `herd msg`
 

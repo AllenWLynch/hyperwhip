@@ -3,7 +3,7 @@
 HyperHerd ships **two** [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills):
 
 - **`hyperherd-config`** — teaches Claude how to author and edit `hyperherd.yaml` files. Open a Claude Code session and ask "set up a sweep over learning rate and three optimizers" — Claude uses the skill's checklist + patterns to produce a config that follows HyperHerd conventions.
-- **`hyperherd-monitor`** — drives the autonomous sweep operator invoked by [`herd monitor`](commands.md#herd-monitor). The skill defines the staged rollout, failure-triage table, NaN/inf detection, status-report cadence, and the exact bash allowlist the agent stays within. You don't usually invoke it by hand — `herd monitor` exec's `claude` with the right initial prompt for you.
+- **`hyperherd-monitor`** — the playbook for the [autonomous monitor](monitor.md): staged rollout, failure-triage policy, NaN/inf detection, status-report cadence. You don't invoke this skill by hand — `herd monitor` does that for you. Edit it if you want to change how the agent operates.
 
 ## Install
 
@@ -38,16 +38,9 @@ It is intentionally a **checklist + patterns**, not a substitute for the docs. F
 
 ## What `hyperherd-monitor` does
 
-The monitor skill is the playbook the agent follows on every wake-up:
+The skill defines the agent's behavior — staged rollout, failure-triage policy, NaN/inf kill rules, cadence, status-report format. See the [Autonomous monitor](monitor.md) page for what that adds up to from a user perspective.
 
-- **Setup interview** on first invocation (metric source, success metric, remediate-vs-notify, time budget, channel) — persisted to `.hyperherd/MONITOR_PLAN.md` for subsequent ticks.
-- **Phased rollout** as a state machine across ticks: canary `-i 0` → small batch `-i 1-2` → full sweep, advancing one phase per tick.
-- **Failure triage table** with separate handling for host OOM (bumpable), CUDA OOM (notify-only — `slurm.mem` doesn't fix GPU memory), `TIMEOUT`, `NODE_FAIL`, and recurring exception clusters.
-- **NaN/inf-only kill policy** for live trials. Anything else suspicious is a `herd msg` warning, not an action — proper early stopping is what algorithms like Hyperband / ASHA / BOHB are for.
-- **Adaptive cadence.** Tight delays during rollout (3–5 min), backed off to ~30 min during steady-state, 60 min after several quiet ticks.
-- **Approved-tooling pre-flight.** Before any non-`herd` Bash call, the agent checks the proposed command against a baked-in allowlist; if it's off-list, it warns the user via `herd msg` first so an unattended tick never silently stalls on a permission prompt.
-
-The full skill source is the canonical reference. After install, read `~/.claude/skills/hyperherd-monitor/SKILL.md` directly to see exactly what the agent is told.
+If you want to change how the agent operates (different cadence, different triage policy, custom warnings), edit `~/.claude/skills/hyperherd-monitor/SKILL.md` directly. The skill is plain Markdown.
 
 ## Source
 
