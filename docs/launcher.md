@@ -104,6 +104,83 @@ The launcher script is a user-provided bash script. HyperHerd does **not** manag
     python train.py "${FLAGS[@]}"
     ```
 
+## Activate your environment inside the launcher
+
+The single most common cause of "it works on the login node, fails inside the SLURM job" is the launcher invoking `python` by name and getting a different interpreter on the worker than on your shell.
+
+**Why it happens.** SLURM's default `--export=ALL` copies environment variables to the job, but it does not re-run your shell startup. On the worker, `bash launch.sh` is a non-interactive shell; depending on the cluster's bash config it may or may not source `.bashrc`, and even when it does, anything that activates a venv interactively (the `uv` shell hooks, `conda init`, `source .venv/bin/activate` typed at the prompt) won't have run. Whatever first `python` is on PATH wins — usually the system one, which doesn't have your packages.
+
+**The footprint of this bug.** Trial fails immediately with `ModuleNotFoundError: No module named 'hydra'` (or torch, lightning, etc.) even though `python -c "import hydra"` works fine in the terminal you ran `herd run` from.
+
+**Fixes** (any of these, pick the one that matches your stack):
+
+=== "uv"
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    OVERRIDES="$1"
+    cd "$(dirname "$0")"
+    uv run python train.py $OVERRIDES
+    ```
+
+    `uv run` finds the project's `.venv` automatically (via `pyproject.toml` / `uv.lock`). Requires `uv` to be on the worker's PATH — usually true when it lives in `~/.local/bin` and your home dir is mounted on compute nodes.
+
+=== "venv (manual activate)"
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    source /absolute/path/to/.venv/bin/activate
+    OVERRIDES="$1"
+    cd "$(dirname "$0")"
+    python train.py $OVERRIDES
+    ```
+
+=== "conda"
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate myenv
+    OVERRIDES="$1"
+    cd "$(dirname "$0")"
+    python train.py $OVERRIDES
+    ```
+
+=== "absolute interpreter"
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    OVERRIDES="$1"
+    cd "$(dirname "$0")"
+    /absolute/path/to/.venv/bin/python train.py $OVERRIDES
+    ```
+
+    No PATH games — but the path is hardcoded, so the launcher isn't portable across machines.
+
+=== "module + apptainer"
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    module load apptainer  # if your cluster uses environment modules
+    OVERRIDES="$1"
+    apptainer exec --nv /path/to/container.sif \
+        python train.py $OVERRIDES
+    ```
+
+    Inside the container the environment is hermetic — host PATH doesn't matter.
+
+If your launcher works on the login node but fails inside SLURM with import errors, this is almost always the cause.
+
 ## Idempotency
 
 `herd run` is idempotent — rerunning it resubmits only `ready`/`failed`/`cancelled` trials. For this to be useful, **your training script must also be idempotent**:

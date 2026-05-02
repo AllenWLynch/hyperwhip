@@ -1,10 +1,12 @@
 """HyperHerd CLI: launch, monitor, and clean SLURM hyperparameter job arrays."""
 
 import argparse
+import json
 import os
 import shutil
 import sys
 
+from hyperherd import agent_output
 from hyperherd.config import ConfigError, load_config
 from hyperherd.constraints import apply_constraints
 from hyperherd.display import (
@@ -76,6 +78,11 @@ def _apply_reconciliation(config, diff, force: bool) -> bool:
 def cmd_launch(args):
     """Launch (or re-launch) a hyperparameter sweep as a SLURM job array."""
     config = load_config(args.workspace)
+    json_mode = getattr(args, "json_output", False)
+
+    def _say(*a, **kw):
+        if not json_mode:
+            print(*a, **kw)
 
     # Preflight checks
     try:
@@ -103,22 +110,50 @@ def cmd_launch(args):
     # Create or load manifest
     existing = manifest.load_manifest(config.workspace) if manifest.workspace_exists(config.workspace) else []
     if existing:
-        print(f"Existing workspace found with {len(existing)} trials.")
+        _say(f"Existing workspace found with {len(existing)} trials.")
         # Refresh status from SLURM before deciding what to resubmit
         _sync_slurm_status(config.workspace)
         existing = manifest.load_manifest(config.workspace)
 
         diff = manifest.reconcile_manifest(existing, combinations)
-        if not _apply_reconciliation(config, diff, args.force):
-            return 1
+        if json_mode:
+            # Reconciliation chatter would be on stdout; skip it in JSON mode.
+            # The agent can diff trials before/after if it cares.
+            active_removed = [t for t in diff.removed if t.get("status") in _ACTIVE_STATUSES]
+            if active_removed and not args.force:
+                print(
+                    f"Config edit removes {len(active_removed)} active trial(s). "
+                    "Pass --force to keep them as orphans.",
+                    file=sys.stderr,
+                )
+                return 1
+            droppable = [t for t in diff.removed if t.get("status") not in _ACTIVE_STATUSES]
+            if droppable:
+                manifest.drop_trials(config.workspace, [t["index"] for t in droppable])
+            if diff.added:
+                manifest.append_trials(
+                    config.workspace, diff.added, config.abbrevs, config.labels
+                )
+        else:
+            if not _apply_reconciliation(config, diff, args.force):
+                return 1
 
         trials = manifest.load_manifest(config.workspace)
         pending = manifest.get_pending_indices(config.workspace)
         if not pending and not args.indices:
+            if json_mode:
+                agent_output.emit(agent_output.launch_payload(
+                    dry_run=bool(args.dry_run),
+                    submitted_indices=[],
+                    slurm_job_id=None,
+                    sbatch_path=None,
+                    trials=trials,
+                ))
+                return 0
             print("All trials are completed or currently running. Nothing to submit.")
             return 0
         if not args.indices:
-            print(f"  {len(pending)} trials need (re)submission.")
+            _say(f"  {len(pending)} trials need (re)submission.")
     else:
         trials = manifest.create_manifest(config.workspace, combinations, abbrevs, config.labels)
         pending = [t["index"] for t in trials]
@@ -153,23 +188,43 @@ def cmd_launch(args):
                 )
                 return 1
         pending = requested
-        print(f"  Submitting {len(pending)} requested trial(s): {args.indices}")
+        _say(f"  Submitting {len(pending)} requested trial(s): {args.indices}")
 
     # Generate sbatch script
     script = slurm.generate_sbatch_script(config, pending, args.max_concurrent)
 
     if args.dry_run:
+        if json_mode:
+            agent_output.emit(agent_output.launch_payload(
+                dry_run=True,
+                submitted_indices=pending,
+                slurm_job_id=None,
+                sbatch_path=None,
+                trials=trials,
+                sbatch_script=script,
+            ))
+            return 0
         print_dry_run(trials, script, defaults=config.defaults)
         return 0
 
     # Submit
-    print(f"Submitting {len(pending)} trials as SLURM job array...")
+    _say(f"Submitting {len(pending)} trials as SLURM job array...")
     job_id = slurm.submit_job(config, script, dry_run=False)
     assert job_id is not None
 
     # Record submission and update statuses
     manifest.record_job_submission(config.workspace, job_id, pending)
     manifest.bulk_update_status(config.workspace, {i: "submitted" for i in pending})
+
+    if json_mode:
+        agent_output.emit(agent_output.launch_payload(
+            dry_run=False,
+            submitted_indices=pending,
+            slurm_job_id=job_id,
+            sbatch_path=manifest.sbatch_path(config.workspace),
+            trials=manifest.load_manifest(config.workspace),
+        ))
+        return 0
 
     print_launch_success(
         job_id=job_id,
@@ -180,7 +235,7 @@ def cmd_launch(args):
     return 0
 
 
-def cmd_monitor(args):
+def cmd_status(args):
     """Show the status of all trials in a hyperparameter sweep."""
     config = load_config(args.workspace)
 
@@ -197,6 +252,10 @@ def cmd_monitor(args):
     log_tails = {}
     for trial in trials:
         log_tails[trial["index"]] = slurm.get_log_tail(config.workspace, trial["index"])
+
+    if getattr(args, "json_output", False):
+        agent_output.emit(agent_output.status_payload(trials, log_tails))
+        return 0
 
     print_status_table(trials, log_tails)
     print_summary(trials)
@@ -241,6 +300,9 @@ def cmd_stats(args):
             (idx, trial_by_idx.get(idx, {}), by_index[idx])
             for idx in sorted(by_index)
         ]
+        if getattr(args, "json_output", False):
+            agent_output.emit(agent_output.stats_payload(rows))
+            return 0
         if not rows:
             print("No accounting data available.")
             return 0
@@ -254,12 +316,20 @@ def cmd_stats(args):
     if idx not in by_index:
         print(f"No SLURM accounting data for trial {idx}.", file=sys.stderr)
         return 1
-    print_stats_table([(idx, trial_by_idx[idx], by_index[idx])])
+    rows = [(idx, trial_by_idx[idx], by_index[idx])]
+    if getattr(args, "json_output", False):
+        agent_output.emit(agent_output.stats_payload(rows))
+        return 0
+    print_stats_table(rows)
     return 0
 
 
 def cmd_tail(args):
-    """Print the last N lines of a trial's log files (stdout and stderr)."""
+    """Print the last N lines of a trial's log files (stdout and stderr).
+
+    `--stdout` / `--stderr` (mutually exclusive) restrict the output to one
+    stream; without either flag, both streams are shown. `--json` returns a
+    structured payload with each requested stream's path and lines."""
     config = load_config(args.workspace)
 
     if not manifest.workspace_exists(config.workspace):
@@ -273,24 +343,64 @@ def cmd_tail(args):
     out_file = os.path.join(log_dir, f"{index}.out")
     err_file = os.path.join(log_dir, f"{index}.err")
 
-    has_out = os.path.isfile(out_file)
-    has_err = os.path.isfile(err_file)
+    # Which streams the user wants. Default (no flag) is both.
+    stream_filter = getattr(args, "stream", None)
+    streams_to_show = (
+        [(stream_filter, out_file if stream_filter == "stdout" else err_file)]
+        if stream_filter
+        else [("stdout", out_file), ("stderr", err_file)]
+    )
 
-    if not has_out and not has_err:
-        print(f"No log files found for trial {index}", file=sys.stderr)
-        return 1
+    if not getattr(args, "json_output", False):
+        if not any(os.path.isfile(p) for _, p in streams_to_show):
+            print(f"No log files found for trial {index}", file=sys.stderr)
+            return 1
 
-    # Print trial info header
+    # Trial header info (status + experiment_name) — used by both modes.
     trials = manifest.load_manifest(config.workspace)
-    for t in trials:
-        if t["index"] == index:
-            exp_name = t.get("experiment_name", "")
-            status = t.get("status", "unknown")
-            print(f"{_DIM}Trial {index} [{status}] {exp_name}{_RESET}")
-            print(f"{_DIM}{'-' * 60}{_RESET}")
-            break
+    trial = next((t for t in trials if t["index"] == index), None)
+    exp_name = trial.get("experiment_name", "") if trial else ""
+    status = trial.get("status", "unknown") if trial else "unknown"
 
-    for log_file, label in [(out_file, "stdout"), (err_file, "stderr")]:
+    if getattr(args, "json_output", False):
+        streams_payload: dict = {}
+        for label, path in streams_to_show:
+            if not os.path.isfile(path):
+                streams_payload[label] = {
+                    "path": path,
+                    "lines": None,
+                    "requested": lines,
+                }
+                continue
+            try:
+                with open(path, "r") as f:
+                    all_lines = f.readlines()
+            except (OSError, UnicodeDecodeError) as e:
+                streams_payload[label] = {
+                    "path": path,
+                    "lines": None,
+                    "requested": lines,
+                    "error": str(e),
+                }
+                continue
+            tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+            streams_payload[label] = {
+                "path": path,
+                "lines": [ln.rstrip("\n") for ln in tail],
+                "requested": lines,
+            }
+        agent_output.emit(agent_output.tail_payload(
+            index=index,
+            status=status,
+            experiment_name=exp_name,
+            streams=streams_payload,
+        ))
+        return 0
+
+    print(f"{_DIM}Trial {index} [{status}] {exp_name}{_RESET}")
+    print(f"{_DIM}{'-' * 60}{_RESET}")
+
+    for label, log_file in streams_to_show:
         if not os.path.isfile(log_file):
             continue
         try:
@@ -426,6 +536,12 @@ def cmd_results(args):
     trials = manifest.load_manifest(config.workspace)
     results = load_all_results(config.workspace)
 
+    if getattr(args, "json_output", False):
+        agent_output.emit(agent_output.results_payload(
+            trials, results, config.param_names
+        ))
+        return 0
+
     if not results:
         print("No results logged yet. Use hyperherd.log_result() from your training script.", file=sys.stderr)
         return 1
@@ -503,21 +619,30 @@ def cmd_stop(args):
 
     if args.all:
         targets = [t for t in trials if t.get("status") in _LIVE_STATUSES]
-        if not targets:
-            print("No live trials to cancel.")
-            return 0
-        cancelled = []
+        cancelled: list = []
         for t in targets:
             jid = _latest_job_id_for(records, t["index"])
             if jid is None:
                 continue
             slurm.cancel_array_task(jid, t["index"])
-            cancelled.append(t["index"])
+            cancelled.append({
+                "index": t["index"],
+                "slurm_job_id": jid,
+                "previous_status": t.get("status"),
+            })
         if cancelled:
             manifest.bulk_update_status(
-                config.workspace, {i: "cancelled" for i in cancelled}
+                config.workspace,
+                {row["index"]: "cancelled" for row in cancelled},
             )
-        print(f"Cancelled {len(cancelled)} trial(s): {sorted(cancelled)}")
+        if getattr(args, "json_output", False):
+            agent_output.emit(agent_output.stop_payload(cancelled))
+            return 0
+        if not targets:
+            print("No live trials to cancel.")
+            return 0
+        idxs = sorted(row["index"] for row in cancelled)
+        print(f"Cancelled {len(cancelled)} trial(s): {idxs}")
         return 0
 
     index = args.index
@@ -539,9 +664,17 @@ def cmd_stop(args):
         print(f"No SLURM job ID recorded for trial {index}.", file=sys.stderr)
         return 1
 
-    print(f"Cancelling trial {index} (job {job_id}_{index})...")
+    if not getattr(args, "json_output", False):
+        print(f"Cancelling trial {index} (job {job_id}_{index})...")
     slurm.cancel_array_task(job_id, index)
     manifest.update_trial_status(config.workspace, index, "cancelled")
+
+    if getattr(args, "json_output", False):
+        agent_output.emit(agent_output.stop_payload([{
+            "index": index,
+            "slurm_job_id": job_id,
+            "previous_status": status,
+        }]))
     return 0
 
 
@@ -600,6 +733,268 @@ def cmd_watch(args):
     return 0
 
 
+_MONITOR_INITIAL_PROMPT_TEMPLATE = (
+    "Use the hyperherd-monitor skill to manage the sweep at {workspace}.\n"
+    "Run the setup interview, kick off the phased rollout, then `/loop` "
+    "(no interval — self-pace via ScheduleWakeup per the skill's cadence "
+    "selection table; tight during rollout, long when the sweep is stable)."
+)
+
+
+# Allow-rules `herd monitor` writes to <workspace>/.claude/settings.local.json
+# so the agent's per-tick toolbox doesn't trigger a permission prompt every
+# few minutes. Scope is the agent's full toolbox by design — herd
+# subcommands, JSON-extraction helpers (jq + python the agent will inevitably
+# reach for), and files inside this workspace.
+_MONITOR_ALLOW_RULES = [
+    # First-class HyperHerd surface
+    "Bash(herd *)",
+    "Bash(jq *)",
+    # Common shell utilities the agent naturally reaches for. Erring broad
+    # here on purpose — the alternative is the agent stalling on a permission
+    # prompt mid-tick because it pipelined through `tee` or `head`. The skill
+    # tells the agent that off-list commands require a `herd msg` warning to
+    # the user first so the session never blocks silently.
+    "Bash(cat *)",
+    "Bash(head *)",
+    "Bash(tail *)",
+    "Bash(tee *)",
+    "Bash(grep *)",
+    "Bash(sed *)",
+    "Bash(awk *)",
+    "Bash(cut *)",
+    "Bash(tr *)",
+    "Bash(sort *)",
+    "Bash(uniq *)",
+    "Bash(wc *)",
+    "Bash(ls *)",
+    "Bash(find *)",
+    "Bash(echo *)",
+    "Bash(printf *)",
+    "Bash(date *)",
+    "Bash(diff *)",
+    "Bash(comm *)",
+    "Bash(mkdir *)",
+    "Bash(cp *)",
+    "Bash(mv *)",
+    "Bash(touch *)",
+    "Bash(test *)",
+    # Workspace files
+    "Edit(/hyperherd.yaml)",
+    "Read(.hyperherd/**)",
+    "Write(.hyperherd/**)",
+    "Edit(.hyperherd/**)",
+]
+
+
+def _ensure_monitor_settings(workspace: str) -> tuple[str, list[str]]:
+    """Merge `_MONITOR_ALLOW_RULES` into `<workspace>/.claude/settings.local.json`.
+
+    Returns (settings_path, newly_added_rules). Existing rules are preserved
+    by string-equality dedup; the rest of the file (other keys, deny lists,
+    etc.) is left alone so this is safe to run on a workspace that already
+    has settings.
+    """
+    settings_dir = os.path.join(workspace, ".claude")
+    settings_path = os.path.join(settings_dir, "settings.local.json")
+    os.makedirs(settings_dir, exist_ok=True)
+
+    if os.path.isfile(settings_path):
+        try:
+            with open(settings_path, "r") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            # Corrupt / unreadable — back it up rather than overwrite blindly.
+            backup = settings_path + ".bak"
+            try:
+                shutil.copyfile(settings_path, backup)
+            except OSError:
+                pass
+            data = {}
+    else:
+        data = {}
+
+    perms = data.setdefault("permissions", {})
+    allow = perms.setdefault("allow", [])
+    if not isinstance(allow, list):
+        allow = []
+        perms["allow"] = allow
+
+    added = []
+    for rule in _MONITOR_ALLOW_RULES:
+        if rule not in allow:
+            allow.append(rule)
+            added.append(rule)
+
+    with open(settings_path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    return settings_path, added
+
+
+def _spawn_watch_background(workspace: str) -> tuple[int, str, str]:
+    """Spawn `herd watch` as a background daemon.
+
+    Uses the same nohup+pidfile recipe documented for the standalone command.
+    Returns (pid, pidfile_path, log_path). Raises FileExistsError if a watch
+    is already running for this workspace.
+    """
+    import subprocess
+
+    ws_dir = manifest.workspace_path(workspace)
+    pidfile = os.path.join(ws_dir, "watch.pid")
+    log_path = os.path.join(ws_dir, "watch.log")
+
+    if os.path.isfile(pidfile):
+        try:
+            with open(pidfile) as f:
+                stale_pid = int(f.read().strip())
+            os.kill(stale_pid, 0)  # signal 0 = "are you alive?"
+        except (OSError, ValueError):
+            # Stale pidfile (process gone or unreadable). Reclaim it.
+            try:
+                os.unlink(pidfile)
+            except OSError:
+                pass
+        else:
+            raise FileExistsError(
+                f"watch already running (PID {stale_pid}, pidfile {pidfile})"
+            )
+
+    os.makedirs(ws_dir, exist_ok=True)
+    log_fp = open(log_path, "ab")
+    proc = subprocess.Popen(
+        ["herd", "watch", "--pidfile", pidfile, workspace],
+        stdout=log_fp,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,  # detach from this controlling terminal
+    )
+    log_fp.close()
+    return proc.pid, pidfile, log_path
+
+
+def cmd_monitor(args):
+    """Start the agent-driven sweep monitor.
+
+    Spawns `herd watch` in the background (unless `--no-watch`), prints the
+    initial prompt the user should paste into Claude Code, and then `exec`s
+    `claude` so the user lands directly in an interactive session. The user
+    wraps the whole thing in tmux/screen if they want it to outlive their
+    shell — same recipe as `herd watch`.
+
+    `--stop` is the inverse: kills the background watch (if any) and exits.
+    The Claude Code session is the user's terminal, so it dies when they
+    close it; this command doesn't try to track or kill claude PIDs.
+    """
+    config = load_config(args.workspace)
+
+    if args.stop:
+        ws_dir = manifest.workspace_path(config.workspace)
+        pidfile = os.path.join(ws_dir, "watch.pid")
+        if not os.path.isfile(pidfile):
+            print("No background watch is running for this workspace.")
+            return 0
+        try:
+            with open(pidfile) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 15)  # SIGTERM
+            print(f"Sent SIGTERM to watch (PID {pid}).")
+        except (OSError, ValueError) as e:
+            print(f"Could not stop watch: {e}", file=sys.stderr)
+            try:
+                os.unlink(pidfile)
+            except OSError:
+                pass
+            return 1
+        # The watch daemon removes its own pidfile on shutdown.
+        return 0
+
+    if not manifest.workspace_exists(config.workspace):
+        print(
+            "No workspace found. Run 'herd run' (even just '--dry-run') first "
+            "so there's a manifest to monitor.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Resolve (and persist) the ntfy fallback topic NOW, before spawning
+    # watch or exec'ing claude. Without this, watch's subprocess-cold-start
+    # delay means the agent's first `herd msg` could race in and mint a
+    # different topic — and you'd end up with watch posting to one channel
+    # and the agent posting to another.
+    if not config.watch.webhook:
+        from hyperherd import watch
+        url, _ = watch.resolve_default_webhook(config.workspace, config.name)
+        print(f"Webhook (ntfy fallback): {url}")
+        print("  Subscribe by pasting that URL into the ntfy iOS/Android app,")
+        print("  or open it in a browser to watch live.")
+        print()
+
+    if not args.no_watch:
+        try:
+            pid, pidfile, log_path = _spawn_watch_background(config.workspace)
+        except FileExistsError as e:
+            print(f"Note: {e}. Skipping watch start.", file=sys.stderr)
+        else:
+            print(f"Started herd watch in background (PID {pid}).")
+            print(f"  pidfile: {pidfile}")
+            print(f"  log:     {log_path}")
+            print(f"  stop:    herd monitor --stop  (or kill $(cat {pidfile}))")
+            print()
+
+    if not args.no_auto_allow:
+        settings_path, added = _ensure_monitor_settings(config.workspace)
+        if added:
+            print(f"Added {len(added)} permission rule(s) to {settings_path}:")
+            for rule in added:
+                print(f"  + {rule}")
+            print(
+                "These pre-approve the agent's tool calls so it can run "
+                "unattended. Pass --no-auto-allow to skip."
+            )
+        else:
+            print(f"Workspace {settings_path} already has the monitor allow-rules.")
+        print()
+
+    prompt = _MONITOR_INITIAL_PROMPT_TEMPLATE.format(
+        workspace=os.path.abspath(config.workspace),
+    )
+
+    # Stash the prompt as an audit trail — useful for debugging what the
+    # agent was actually told to do on a given run, even though the user
+    # doesn't need to paste it (`claude "<prompt>"` injects it directly).
+    prompt_path = os.path.join(manifest.workspace_path(config.workspace),
+                               "monitor-prompt.txt")
+    try:
+        with open(prompt_path, "w") as f:
+            f.write(prompt + "\n")
+    except OSError:
+        prompt_path = None
+
+    print("Starting Claude Code with the monitor agent...")
+    print(f"  prompt: {prompt_path}" if prompt_path else "")
+    print(
+        "  detach: close the terminal (watch keeps running); "
+        "wrap in `tmux new -s monitor 'herd monitor'` to keep the session alive."
+    )
+    print()
+
+    # `claude "<prompt>"` (without -p) starts an interactive session with
+    # the prompt already running as the first user turn. -p is one-shot and
+    # would defeat the persistent /loop pattern.
+    try:
+        os.execvp("claude", ["claude", prompt])
+    except FileNotFoundError:
+        print(
+            f"Error: `claude` not on PATH. Install Claude Code "
+            f"(https://claude.com/claude-code) or run "
+            f"`claude \"$(cat {prompt_path or '<prompt>'})\"` from a host that has it.",
+            file=sys.stderr,
+        )
+        return 1
+
+
 def cmd_msg(args):
     """Post a free-text message to the watch webhook configured for this
     workspace (or its zero-config ntfy fallback). Lets you announce things
@@ -631,6 +1026,87 @@ def cmd_msg(args):
         return 1
 
     print(f"Posted to {webhook}")
+    return 0
+
+
+def cmd_snapshot(args):
+    """Bundle status + sacct + logged metrics + per-trial last-log + recent
+    failed-trial stderr into a single JSON document.
+
+    Designed for an agent loop: one CLI call per tick instead of three or
+    four (status / stats / res / tail). Emits JSON unconditionally — the
+    command has no human-formatted form."""
+    config = load_config(args.workspace)
+    if not manifest.workspace_exists(config.workspace):
+        print("No workspace found. Run 'herd run' first.", file=sys.stderr)
+        return 1
+
+    _sync_slurm_status(config.workspace)
+    trials = manifest.load_manifest(config.workspace)
+    job_records = manifest.get_job_ids(config.workspace)
+
+    # sacct accounting is best-effort: missing binary, parse failure, or no
+    # submitted jobs all leave stats_by_idx empty rather than aborting the
+    # snapshot. The agent can detect the empty dict and decide what to do.
+    stats_by_idx: dict = {}
+    job_id_by_idx: dict = {}
+    if job_records:
+        try:
+            all_stats = slurm.query_job_stats([r["slurm_job_id"] for r in job_records])
+        except FileNotFoundError:
+            all_stats = {}
+        except Exception as e:
+            print(f"Warning: stats query failed: {e}", file=sys.stderr)
+            all_stats = {}
+        for record in job_records:
+            jid = record["slurm_job_id"]
+            for idx in record.get("indices", []):
+                s = all_stats.get((jid, idx))
+                if s is not None:
+                    stats_by_idx[idx] = s
+                # Most recent submission wins — record_job_submission appends.
+                job_id_by_idx[idx] = jid
+
+    metrics_by_idx = load_all_results(config.workspace)
+
+    log_tails = {
+        t["index"]: slurm.get_log_tail(config.workspace, t["index"])
+        for t in trials
+    }
+
+    failed_stderr: dict = {}
+    failed_indices = [t["index"] for t in trials if t.get("status") == "failed"]
+    failed_indices = failed_indices[-args.max_failed:]
+    log_dir = manifest.logs_path(config.workspace)
+    for idx in failed_indices:
+        err_file = os.path.join(log_dir, f"{idx}.err")
+        if not os.path.isfile(err_file):
+            failed_stderr[idx] = {"path": err_file, "lines": None, "truncated": False}
+            continue
+        try:
+            with open(err_file, "r", errors="replace") as f:
+                all_lines = f.readlines()
+        except OSError:
+            failed_stderr[idx] = {"path": err_file, "lines": None, "truncated": False}
+            continue
+        truncated = len(all_lines) > args.lines
+        tail = all_lines[-args.lines:] if truncated else all_lines
+        failed_stderr[idx] = {
+            "path": err_file,
+            "lines": [ln.rstrip("\n") for ln in tail],
+            "truncated": truncated,
+        }
+
+    agent_output.emit(agent_output.snapshot_payload(
+        sweep_name=config.name,
+        workspace_path=os.path.abspath(config.workspace),
+        trials=trials,
+        stats_by_idx=stats_by_idx,
+        metrics_by_idx=metrics_by_idx,
+        log_tails=log_tails,
+        failed_stderr=failed_stderr,
+        job_id_by_idx=job_id_by_idx,
+    ))
     return 0
 
 
@@ -671,51 +1147,77 @@ def cmd_dog(args):
     return 0
 
 
-_SKILL_NAME = "hyperherd-config"
+def _packaged_skills_dir() -> str:
+    return os.path.join(os.path.dirname(__file__), "skills")
 
 
-def _packaged_skill_path() -> str:
-    return os.path.join(os.path.dirname(__file__), "skill", "SKILL.md")
+def _list_packaged_skills() -> list[tuple[str, str]]:
+    """Return [(name, src_path), ...] for every `<pkg>/skills/<name>/SKILL.md`."""
+    base = _packaged_skills_dir()
+    if not os.path.isdir(base):
+        return []
+    out: list[tuple[str, str]] = []
+    for name in sorted(os.listdir(base)):
+        src = os.path.join(base, name, "SKILL.md")
+        if os.path.isfile(src):
+            out.append((name, src))
+    return out
 
 
 def cmd_install_skill(args):
-    """Install the hyperherd-config Claude Code skill into ~/.claude/skills/."""
-    src = _packaged_skill_path()
-    if not os.path.isfile(src):
+    """Install bundled Claude Code skills into ~/.claude/skills/ (or
+    ./.claude/skills/ with `--scope project`).
+
+    By default installs all skills under `hyperherd/skills/*/`. Use
+    `--name X` to install just one (matches the directory name)."""
+    skills = _list_packaged_skills()
+    if not skills:
         print(
-            f"Error: packaged skill not found at {src}.\n"
+            f"Error: no packaged skills found under {_packaged_skills_dir()}.\n"
             "This usually means the install is broken — try `pip install -e .` "
             "from a checkout, or reinstall the package.",
             file=sys.stderr,
         )
         return 1
 
+    if args.name:
+        skills = [(n, p) for n, p in skills if n == args.name]
+        if not skills:
+            print(
+                f"Error: no skill named {args.name!r}. "
+                f"Available: {', '.join(n for n, _ in _list_packaged_skills())}",
+                file=sys.stderr,
+            )
+            return 1
+
     if args.scope == "project":
         base = os.path.abspath(".claude/skills")
     else:
         base = os.path.expanduser("~/.claude/skills")
 
-    dest_dir = os.path.join(base, _SKILL_NAME)
-    dest = os.path.join(dest_dir, "SKILL.md")
+    failures = 0
+    for name, src in skills:
+        dest_dir = os.path.join(base, name)
+        dest = os.path.join(dest_dir, "SKILL.md")
 
-    if os.path.exists(dest):
-        if os.path.realpath(dest) == os.path.realpath(src):
-            print(f"Skill already linked to packaged source at {dest} — nothing to do.")
-            return 0
-        if not args.force:
-            print(
-                f"Skill already installed at {dest}. Use --force to overwrite.",
-                file=sys.stderr,
-            )
-            return 1
+        if os.path.exists(dest):
+            if os.path.realpath(dest) == os.path.realpath(src):
+                print(f"  {name}: already linked to packaged source — skipping.")
+                continue
+            if not args.force:
+                print(
+                    f"  {name}: already installed at {dest}. Use --force to overwrite.",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
 
-    os.makedirs(dest_dir, exist_ok=True)
-    shutil.copyfile(src, dest)
-    print(f"Installed {_SKILL_NAME} skill to {dest}")
-    print(
-        "Open a new Claude Code session in any directory to use it — invoke by "
-        "asking Claude to author or edit a hyperherd.yaml."
-    )
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.copyfile(src, dest)
+        print(f"  {name}: installed to {dest}")
+
+    if failures:
+        return 1
     return 0
 
 
@@ -764,6 +1266,21 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # --json flag, attached via parent to commands an agent typically drives.
+    # The agent flag is a small surface (one parser parent) so adding a new
+    # JSON-capable command is a one-liner: `parents=[json_parent]`.
+    json_parent = argparse.ArgumentParser(add_help=False)
+    json_parent.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help=(
+            "Emit machine-readable JSON to stdout instead of the human table. "
+            "Memory in bytes, elapsed in seconds, status as a stable enum. "
+            "Errors still go to stderr with a non-zero exit code."
+        ),
+    )
+
     # init
     p_init = subparsers.add_parser("init", help="Scaffold a new config and launcher script")
     p_init.add_argument("directory", nargs="?", default=".", help="Directory to create files in (default: current)")
@@ -772,7 +1289,7 @@ def main():
     p_init.add_argument("-f", "--force", action="store_true", help="Overwrite existing files")
 
     # launch
-    p_launch = subparsers.add_parser("run", help="Submit a hyperparameter sweep")
+    p_launch = subparsers.add_parser("run", help="Submit a hyperparameter sweep", parents=[json_parent])
     p_launch.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_launch.add_argument(
         "-n", "--dry-run", action="store_true",
@@ -796,11 +1313,11 @@ def main():
     )
 
     # monitor
-    p_monitor = subparsers.add_parser("status", help="Show status of all trials")
+    p_monitor = subparsers.add_parser("status", help="Show status of all trials", parents=[json_parent])
     p_monitor.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
 
     # stats — SLURM accounting (sacct)
-    p_stats = subparsers.add_parser("stats", help="Print runtime/memory accounting from sacct")
+    p_stats = subparsers.add_parser("stats", help="Print runtime/memory accounting from sacct", parents=[json_parent])
     p_stats.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_stats.add_argument("index", nargs="?", type=int, default=None, help="Trial index (omit to show every trial)")
 
@@ -822,17 +1339,26 @@ def main():
     )
 
     # tail
-    p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log")
+    p_tail = subparsers.add_parser("tail", help="Print last N lines of a trial's log", parents=[json_parent])
     p_tail.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_tail.add_argument("index", type=int, help="Trial index to tail")
     p_tail.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show (default: 20)")
+    p_tail_streams = p_tail.add_mutually_exclusive_group()
+    p_tail_streams.add_argument(
+        "--stdout", dest="stream", action="store_const", const="stdout",
+        help="Show only stdout (.out)",
+    )
+    p_tail_streams.add_argument(
+        "--stderr", dest="stream", action="store_const", const="stderr",
+        help="Show only stderr (.err)",
+    )
 
     # results
-    p_results = subparsers.add_parser("res", help="Print TSV of trial parameters and logged metrics")
+    p_results = subparsers.add_parser("res", help="Print TSV of trial parameters and logged metrics", parents=[json_parent])
     p_results.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
 
     # stop
-    p_stop = subparsers.add_parser("stop", help="Cancel a running/queued trial (or all of them)")
+    p_stop = subparsers.add_parser("stop", help="Cancel a running/queued trial (or all of them)", parents=[json_parent])
     p_stop.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
     p_stop.add_argument("index", nargs="?", type=int, default=None, help="Trial index to cancel")
     p_stop.add_argument("-a", "--all", action="store_true", help="Cancel every running/queued trial in the workspace")
@@ -853,6 +1379,50 @@ def main():
     p_watch.add_argument(
         "--pidfile", default=None,
         help="Write the daemon PID here (for external supervisors / kill scripts)",
+    )
+
+    # monitor — start the agent-driven sweep monitor (watch + Claude Code)
+    p_monitor = subparsers.add_parser(
+        "monitor",
+        help="Start the agent-driven sweep monitor (background watch + Claude Code)",
+    )
+    p_monitor.add_argument(
+        "workspace", nargs="?", default=".",
+        help="Workspace directory (default: current dir)",
+    )
+    p_monitor.add_argument(
+        "--no-watch", action="store_true",
+        help="Don't spawn `herd watch` in the background (assume one is already running)",
+    )
+    p_monitor.add_argument(
+        "--no-auto-allow", action="store_true",
+        help=(
+            "Don't write monitor allow-rules to <workspace>/.claude/settings.local.json. "
+            "Without these rules Claude Code will prompt before each tool call, "
+            "which defeats unattended operation."
+        ),
+    )
+    p_monitor.add_argument(
+        "--stop", action="store_true",
+        help="Stop the background watch for this workspace and exit (does not touch Claude Code sessions)",
+    )
+
+    # snapshot — bundled JSON for agent loops (status + stats + failed stderr)
+    p_snapshot = subparsers.add_parser(
+        "snapshot",
+        help="Bundled JSON snapshot (status + sacct + metrics + last-log + failed stderr) for agents",
+    )
+    p_snapshot.add_argument(
+        "workspace", nargs="?", default=".",
+        help="Workspace directory (default: current dir)",
+    )
+    p_snapshot.add_argument(
+        "-n", "--lines", type=int, default=20,
+        help="Max stderr lines per failed trial (default: 20)",
+    )
+    p_snapshot.add_argument(
+        "--max-failed", type=int, default=20,
+        help="Max number of failed trials to include stderr for (default: 20)",
     )
 
     # msg — post a free-text message to the same webhook
@@ -878,13 +1448,17 @@ def main():
     # install-skill
     p_skill = subparsers.add_parser(
         "install-skill",
-        help="Install the hyperherd-config Claude Code skill",
+        help="Install bundled Claude Code skills (hyperherd-config, hyperherd-monitor)",
     )
     p_skill.add_argument(
         "--scope",
         choices=("user", "project"),
         default="user",
         help="user: ~/.claude/skills (default); project: ./.claude/skills",
+    )
+    p_skill.add_argument(
+        "--name", default=None,
+        help="Install only this skill (default: install all bundled skills)",
     )
     p_skill.add_argument(
         "-f", "--force", action="store_true", help="Overwrite an existing install",
@@ -914,13 +1488,15 @@ def main():
         "init": cmd_init,
         "run": cmd_launch,
         "test": cmd_test,
-        "status": cmd_monitor,
+        "status": cmd_status,
         "stats": cmd_stats,
         "tail": cmd_tail,
         "res": cmd_results,
         "stop": cmd_stop,
         "clean": cmd_clean,
         "watch": cmd_watch,
+        "monitor": cmd_monitor,
+        "snapshot": cmd_snapshot,
         "msg": cmd_msg,
         "install-skill": cmd_install_skill,
         "dog": cmd_dog,

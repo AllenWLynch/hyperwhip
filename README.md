@@ -1,12 +1,19 @@
 # HyperHerd
 
-Launch and monitor hyperparameter optimization job arrays on SLURM.
-
-You write a YAML sweep config and a bash launcher script. HyperHerd generates a SLURM job array, hands each task a string of `name=value` overrides, and tracks state across resubmissions.
-
-[Hydra](https://hydra.cc/) is the recommended trainer harness (its CLI consumes the override format directly), but the launcher is free-form bash — parse the arguments however you want.
+**Hyperparameter sweeps on SLURM, run by an autonomous agent.** Declare your search in YAML, hand over a one-line launcher script, and walk away — `herd monitor` spawns a Claude Code agent that submits trials in stages, diagnoses failures, retries the ones SLURM can fix, and pings your phone only when it can't.
 
 📖 **Full documentation: [allenwlynch.github.io/hyperherd](https://allenwlynch.github.io/hyperherd/)**
+
+## What you get
+
+- **One-command sweeps.** Write a YAML, run `herd run`, and that's it — no sbatch boilerplate, no manual resubmits.
+- **An agent that operates the sweep for you.** `herd monitor` ramps trials in stages, diagnoses failures, bumps memory or wall-time when that's the right fix, and only interrupts you when it isn't.
+- **Phone notifications.** Real-time Slack / Discord / ntfy alerts on failure and completion. Zero-config ntfy fallback works out of the box; the iOS / Android app pings you the moment something breaks.
+- **Resume from anywhere.** Pull the plug, edit the sweep, re-run — completed trials stick, failed ones go back to the queue.
+- **Edit mid-run.** Bump a learning-rate range or add a value; the next `herd run` appends the new trials without disturbing the ones already running.
+- **Configs you don't have to memorize.** A bundled Claude Code skill writes `hyperherd.yaml` for you from a one-paragraph description.
+
+[Hydra](https://hydra.cc/) is the recommended trainer harness (its CLI consumes the override format natively), but the launcher is free-form bash — parse the arguments however you want.
 
 ## Quick start
 

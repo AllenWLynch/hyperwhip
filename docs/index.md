@@ -1,28 +1,24 @@
 # HyperHerd
 
-**Launch and monitor hyperparameter optimization job arrays on SLURM.**
-
-HyperHerd takes a YAML configuration file describing your hyperparameter search space and submits it as a SLURM job array. Each array task receives a string of `name=value` overrides for one parameter combination. A user-provided launcher script handles container setup, environment modules, and invokes your training command however it likes.
-
-[Hydra](https://hydra.cc/) is the recommended trainer harness — its CLI consumes `name=value` overrides natively, so the string passes through unchanged — but you're free to parse the arguments however you want. The only Hydra-specific feature in HyperHerd is `herd test`, which appends `--cfg job` to validate a Hydra config without running training.
+**Hyperparameter sweeps on SLURM, run by an autonomous agent.** Declare your search in YAML, hand over a one-line launcher script, and walk away — [`herd monitor`](commands.md#herd-monitor) spawns a Claude Code agent that submits trials in stages, diagnoses failures, retries when SLURM can fix the problem, and pings your phone only when it can't.
 
 ## What you write
 
 Two files in a workspace directory:
 
-- **`hyperherd.yaml`** — declarative sweep config: parameters, grid mode, SLURM resources, conditions, static Hydra overrides.
-- **`launch.sh`** — a bash script that receives a `name=value` override string as `$1` and runs your training command in whatever environment you need (container, conda, modules, etc.).
+- **`hyperherd.yaml`** — your sweep declaratively: parameters, grid mode, SLURM resources, conditions.
+- **`launch.sh`** — a one-line bash script that receives a `name=value` override string as `$1` and runs your training command in whatever environment you need (container, conda, uv, modules).
 
-## What HyperHerd does
+## What you get
 
-- Generates the full set of trials from your sweep definition (full grid, partial grid, or one-at-a-time).
-- Applies declarative `conditions` to filter or modify combinations.
-- Writes a manifest of `(trial_index, params, experiment_name)` records.
-- Generates and submits a SLURM array job; each task resolves its parameters from the manifest and invokes your launcher.
-- Tracks state across runs: re-running the same workspace resubmits only failed/pending trials.
-- Lets you **edit `hyperherd.yaml` mid-sweep** — new trials are appended on the next `herd run`; completed trials keep their results.
-- Reads back per-trial metrics logged via `from hyperherd import log_result`.
-- Optional [`herd watch`](commands.md#herd-watch) daemon posts trial state changes to Slack / Discord / ntfy / any webhook.
+- **One-command sweeps.** No sbatch boilerplate, no manual resubmits — `herd run` generates and submits the array, tracks state, and resumes failed/pending trials on rerun.
+- **An agent that actually operates the sweep.** [`herd monitor`](commands.md#herd-monitor) ramps trials in stages, diagnoses failures, bumps memory or wall-time when that's the right fix, and only interrupts you when it isn't.
+- **Phone notifications.** Real-time Slack / Discord / ntfy alerts on failure and completion via [`herd watch`](commands.md#herd-watch). Zero-config ntfy fallback works out of the box.
+- **Edit your sweep mid-run.** Bump a parameter range or add a value; the next `herd run` appends new trials without touching the ones already running.
+- **Configs you don't have to memorize.** The bundled [Claude Code skill](claude-skill.md) writes `hyperherd.yaml` for you from a one-paragraph description.
+- **An audit trail.** Every trial's parameters, status, and logged metrics live in `.hyperherd/` and come out as TSV via `herd res` or JSON via `herd snapshot`.
+
+[Hydra](https://hydra.cc/) is the recommended trainer harness — its CLI consumes `name=value` overrides natively, so the string passes through unchanged — but the launcher is free-form bash, so parse the arguments however you want.
 
 ## Scope
 
@@ -31,8 +27,6 @@ HyperHerd is opinionated. It assumes:
 1. SLURM job arrays as the dispatch mechanism.
 2. `name=value` overrides as the parameter contract.
 3. A bash launcher script as the integration point.
-
-Hydra is recommended (its CLI consumes the overrides directly), but the launcher is a free-form bash script — parse the override string however you want.
 
 ## Where to next
 

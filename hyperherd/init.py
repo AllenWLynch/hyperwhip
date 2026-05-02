@@ -30,15 +30,16 @@ launcher: ./launch.sh
 
 # `herd watch` posts trial state changes to a webhook (Slack/Discord/ntfy/
 # anything that accepts a JSON or plain-text POST). Run in a nohup/tmux/
-# screen session. With no `webhook` set, falls back to a per-workspace
-# ntfy.sh topic and prints the subscribe URL on startup.
+# screen session, or use `herd monitor` which spawns it for you. With no
+# `webhook` set, falls back to a per-workspace ntfy.sh topic and prints the
+# subscribe URL on startup. The defaults below are a good starting point —
+# uncomment to customize. To use Slack/Discord instead, also set `webhook:`.
 # watch:
-#   webhook: https://hooks.slack.com/services/T.../B.../xxxx
-#   format: slack                     # slack | discord | ntfy | raw
-#   interval_seconds: 60              # how often to poll SLURM
-#   heartbeat_minutes: 5              # min gap between heartbeat digests
-#   events: [failed, done, heartbeat] # which events to deliver
-#   summarize: true                   # opt-in: `claude -p` paragraph in raw payloads
+#     format: ntfy                      # ntfy | slack | discord | raw
+#     interval_seconds: 30              # how often to poll SLURM
+#     events: [failed, done, heartbeat] # which events to deliver
+#     heartbeat_minutes: 1              # min gap between heartbeat digests
+#     summarize: true                   # opt-in: `claude -p` paragraph on failures
 
 parameters:
 {parameters_block}

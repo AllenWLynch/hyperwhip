@@ -3,7 +3,7 @@ name: mnist_sweep
 grid: [learning_rate, optimizer]
 
 slurm:
-  partition: short
+  partition: short,park
   time: "01:00:00"
   mem: "1500MB"
   cpus_per_task: 1

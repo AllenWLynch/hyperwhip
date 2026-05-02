@@ -470,7 +470,15 @@ def _summarize_failure_with_claude(
 
     Returns None on any error (claude missing, non-zero exit, timeout); the
     daemon falls back to the raw stderr tail in that case. Never raises.
+
+    Skips the LLM call entirely for `CANCELLED` trials: the cancellation was
+    deliberate (user `herd stop`, scancel, admin action), and asking an LLM
+    to diagnose an empty stderr tail just produces a rambling theory about
+    why training didn't print anything. The webhook's "trial X cancelled"
+    line carries all the context worth carrying.
     """
+    if failure.get("slurm_state") == "CANCELLED":
+        return None
     payload = {
         "sweep": sweep_name,
         "trial": {

@@ -30,3 +30,6 @@ examples/*/data/
 examples/*/outputs/
 examples/*/mock_sweep/
 examples/*/logs/
+
+# Per-workspace agent state created by `herd monitor`
+examples/*/.claude/

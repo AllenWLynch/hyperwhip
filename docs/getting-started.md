@@ -133,6 +133,16 @@ herd res
 herd clean --all
 ```
 
+## Hands-off operation: `herd monitor`
+
+Steps 4–6 are the manual loop. If you'd rather hand the sweep over to an agent — staged rollout, automatic mem/time bumps when SLURM can fix it, real-time webhook alerts, and per-tick status messages on your phone — replace the manual monitoring with one command:
+
+```bash
+herd monitor
+```
+
+That spawns `herd watch` in the background, drops you into a Claude Code session running the [`hyperherd-monitor` skill](claude-skill.md), and walks you through a one-time setup interview (metric source, success metric, whether to auto-remediate failures). The agent then handles ramping, triage, and notifications until the sweep finishes. Wrap in `tmux` to keep it alive after logout. See [`herd monitor`](commands.md#herd-monitor) for the full lifecycle.
+
 ## Next steps
 
 - The full **[sweep config reference](configuration.md)** covers every field in `hyperherd.yaml`.

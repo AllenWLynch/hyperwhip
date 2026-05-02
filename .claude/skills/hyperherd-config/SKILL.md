@@ -1,1 +1,1 @@
-../../../hyperherd/skill/SKILL.md
+../../../hyperherd/skills/hyperherd-config/SKILL.md

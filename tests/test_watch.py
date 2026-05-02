@@ -299,6 +299,22 @@ class TestFailureSummarize(unittest.TestCase):
             )
         self.assertEqual(out, "Hit the wallclock.")
 
+    def test_cancelled_trials_skip_claude_call(self):
+        # A user-cancelled trial has nothing to diagnose; claude -p without
+        # that context confabulates. Skip the call entirely and let the
+        # daemon's existing "trial X cancelled" line carry the message.
+        cancelled = {
+            "cause": "CANCELLED",
+            "slurm_state": "CANCELLED",
+            "stderr_tail": "",
+        }
+        with mock.patch("subprocess.run") as run_mock:
+            out = watch._summarize_failure_with_claude(
+                "demo", self._trial(), cancelled
+            )
+        self.assertIsNone(out)
+        run_mock.assert_not_called()
+
 
 class TestStderrTail(unittest.TestCase):
     def setUp(self):

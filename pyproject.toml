@@ -24,4 +24,4 @@ herd = "hyperherd.cli:main"
 include = ["hyperherd*"]
 
 [tool.setuptools.package-data]
-hyperherd = ["skill/SKILL.md"]
+hyperherd = ["skills/*/SKILL.md"]
