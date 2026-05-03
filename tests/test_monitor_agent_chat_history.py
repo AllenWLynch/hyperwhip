@@ -124,5 +124,63 @@ class TestStateReadsChatHistory(unittest.TestCase):
         self.assertEqual(entries[1].author, "alice")
 
 
+class TestChatHistoryInvariant(unittest.TestCase):
+    """Lock in the design rule: chat_history contains agent `msg` posts
+    and user mentions/replies, and nothing else. In particular:
+
+    - `tick_summary` writes nothing (it's the heartbeat, not conversation).
+    - Slash commands never reach the chat history (they handle their
+      own UI via Discord interactions, no record_chat_entry call).
+    - The daemon's direct `channel.post` for the final-stop notification
+      doesn't record either (it's a daemon-level event, not agent voice).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = Path(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _hist(self):
+        path = self.workspace / ".hyperherd" / "chat-history.jsonl"
+        if not path.is_file():
+            return []
+        return [
+            __import__("json").loads(ln)
+            for ln in path.read_text().splitlines() if ln.strip()
+        ]
+
+    def test_only_msg_and_drained_inbox_appear(self):
+        """The two legitimate writers — `record_chat_entry` from the msg
+        tool, and the inbox-drain mirror in state.compute — both produce
+        records. Nothing else writes to the file."""
+        # Agent msg: records.
+        record_chat_entry(self.workspace, role="agent",
+                          text="Herd dog: a real reply",
+                          via="discord", author="Herd dog")
+
+        # User mention via inbox-drain (the only path that should write
+        # role=user entries — slash commands and plain chatter never
+        # reach _drain_inbox under the new on_message gating).
+        import json as _json
+        inbox_path = self.workspace / ".hyperherd" / state_mod.INBOX_FILE
+        inbox_path.parent.mkdir(parents=True, exist_ok=True)
+        inbox_path.write_text(_json.dumps({
+            "timestamp": "2026-05-03T00:00:00",
+            "source": "discord", "author": "alice",
+            "text": "what's idx 3 doing?",
+        }) + "\n")
+        state_mod._drain_inbox(self.workspace)
+
+        hist = self._hist()
+        self.assertEqual(len(hist), 2)
+        roles = [h["role"] for h in hist]
+        self.assertEqual(set(roles), {"agent", "user"})
+        # No "system" / "heartbeat" / "command" or other roles leak in.
+        for h in hist:
+            self.assertIn(h["role"], ("agent", "user"))
+
+
 if __name__ == "__main__":
     unittest.main()

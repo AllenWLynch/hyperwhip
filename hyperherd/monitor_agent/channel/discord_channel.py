@@ -1,24 +1,34 @@
 """Discord transport for the monitor daemon.
 
 Connects to Discord as a bot, finds or creates a text channel for the
-sweep inside the configured guild, listens for messages there, and posts
-the agent's outbound `msg` calls into the same channel.
+sweep inside the configured guild, and uses it as both the agent's
+notification surface and the inbox for user replies.
+
+Three message paths in the channel:
+
+1. **Slash commands** (`/status`, `/stop`, `/tail`, `/help`, …) — handled
+   locally via `monitor_agent.commands` without invoking the agent.
+   Discord's UI provides typed parameter prompts.
+2. **Mentions / replies** (`@HerdDog ...` or replying to a bot message)
+   — stripped of the mention and routed to the daemon's inbox handler,
+   which wakes the loop so the agent can respond on the next tick.
+3. **Plain channel messages** — ignored. The channel is shared; people
+   can chat without summoning the agent.
 
 Setup steps the user does once per Discord server:
 
 1. Create an application + bot in the Discord Developer Portal.
 2. Enable the **MESSAGE CONTENT** privileged gateway intent on the bot.
-3. Generate an invite URL with scopes `bot` and the permissions
-   `View Channels`, `Send Messages`, `Read Message History`,
-   `Manage Channels` (the last is needed for auto-creation).
+3. Generate an invite URL with scopes `bot` + `applications.commands`
+   and the permissions `View Channels`, `Send Messages`,
+   `Read Message History`, `Manage Channels`.
 4. Invite the bot to their server.
 5. Copy the bot token → `DISCORD_BOT_TOKEN` env var.
-6. Right-click the server name in Discord (with Developer Mode on) →
-   Copy Server ID → put it in `hyperherd.yaml` under
-   `discord.guild_id`.
+6. Right-click the server name (Developer Mode on) → Copy Server ID →
+   `discord.guild_id` in `hyperherd.yaml`.
 
-Restart the daemon. It will create a channel named after the sweep
-(e.g. `mnist-sweep`) on first run, then reuse it on subsequent runs.
+Restart the daemon. It registers slash commands per-guild on first
+connect (instant; global sync would take an hour to propagate).
 """
 
 from __future__ import annotations
@@ -26,8 +36,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 
+from hyperherd.monitor_agent import commands as cmd_mod
 from hyperherd.monitor_agent.channel import (
     InboundEvent, InboundHandler, MessageChannel,
 )
@@ -44,6 +56,13 @@ def sweep_to_channel_name(sweep_name: str) -> str:
     s = re.sub(r"[^a-z0-9\-]", "", s)
     s = re.sub(r"-+", "-", s).strip("-")
     return (s or "hyperherd")[:100]
+
+
+def strip_mention(text: str, bot_user_id: int) -> str:
+    """Remove leading @-mentions of the bot from a message body. Discord
+    serializes them as `<@USERID>` or `<@!USERID>`."""
+    pattern = re.compile(rf"<@!?{bot_user_id}>")
+    return pattern.sub("", text).strip()
 
 
 class DiscordChannel(MessageChannel):
@@ -63,15 +82,18 @@ class DiscordChannel(MessageChannel):
         token: str,
         guild_id: int,
         sweep_name: str,
+        workspace: Path,
         channel_id: Optional[int] = None,
         channel_name: Optional[str] = None,
     ):
         self._token = token
         self._guild_id = guild_id
         self._sweep_name = sweep_name
+        self._workspace = Path(workspace)
         self._explicit_channel_id = channel_id
         self._explicit_channel_name = channel_name
         self._client = None  # type: ignore[assignment]
+        self._tree = None
         self._client_task: Optional[asyncio.Task] = None
         self._channel = None
         self._on_inbound: Optional[InboundHandler] = None
@@ -83,6 +105,7 @@ class DiscordChannel(MessageChannel):
     async def start(self) -> None:
         try:
             import discord
+            from discord import app_commands
         except ImportError as e:  # pragma: no cover
             raise RuntimeError(
                 "discord.py not installed. Install the monitor extras: "
@@ -93,45 +116,26 @@ class DiscordChannel(MessageChannel):
         intents.message_content = True
         intents.guilds = True
         self._client = discord.Client(intents=intents)
+        self._tree = app_commands.CommandTree(self._client)
+        self._register_slash_commands(app_commands)
 
         @self._client.event
         async def on_ready():  # noqa: ARG001 — discord.py-required signature
             log.info("Discord connected as %s", self._client.user)
             try:
                 await self._resolve_or_create_channel()
+                # Per-guild sync is instant; global sync takes ~1h.
+                await self._tree.sync(guild=discord.Object(id=self._guild_id))
+                log.info("Slash commands synced to guild %s", self._guild_id)
                 self._ready.set()
             except Exception as e:
-                log.error("Failed to resolve Discord channel: %s", e)
-                # Surface the failure by closing the client so the gather
-                # in the daemon raises rather than hanging on _ready.
+                log.error("Discord setup failed: %s", e)
                 await self._client.close()
 
         @self._client.event
         async def on_message(message):
-            if self._client is None:
-                return
-            if message.author.id == self._client.user.id:
-                return
-            if self._channel is None or message.channel.id != self._channel.id:
-                return
-            if self._on_inbound is None:
-                return
-            event = InboundEvent(
-                timestamp=message.created_at.isoformat(),
-                source="discord",
-                author=str(message.author),
-                text=message.content or "",
-            )
-            try:
-                await self._on_inbound(event)
-            except Exception as e:
-                log.warning("Inbound handler raised: %s", e)
+            await self._handle_inbound_message(message)
 
-        # Run discord.py's connect-and-poll loop as a background task. We
-        # race the ready-event against the client task so that connection
-        # failures (bad token, network) and post-connect failures (missing
-        # permissions inside on_ready, which closes the client) both
-        # surface here as exceptions instead of hanging on the wait.
         self._client_task = asyncio.create_task(
             self._client.start(self._token), name="discord-client"
         )
@@ -166,6 +170,117 @@ class DiscordChannel(MessageChannel):
             await self._channel.send(body)
         except Exception as e:
             log.warning("Failed to post to Discord: %s", e)
+
+    # --- inbound: only mentions/replies reach the agent ------------------
+
+    async def _handle_inbound_message(self, message) -> None:
+        if self._client is None or self._channel is None:
+            return
+        if message.author.id == self._client.user.id:
+            return
+        if message.channel.id != self._channel.id:
+            return
+
+        is_mention = self._client.user in message.mentions
+        is_reply_to_bot = (
+            message.reference is not None
+            and message.reference.resolved is not None
+            and getattr(message.reference.resolved.author, "id", None)
+                == self._client.user.id
+        )
+        if not (is_mention or is_reply_to_bot):
+            # Plain channel chatter — ignored on purpose. The agent only
+            # responds when explicitly addressed.
+            return
+
+        if self._on_inbound is None:
+            return
+
+        cleaned = strip_mention(message.content or "", self._client.user.id)
+        if not cleaned:
+            # An @mention with no content — nothing for the agent to act on.
+            return
+
+        event = InboundEvent(
+            timestamp=message.created_at.isoformat(),
+            source="discord",
+            author=str(message.author),
+            text=cleaned,
+        )
+        try:
+            await self._on_inbound(event)
+        except Exception as e:
+            log.warning("Inbound handler raised: %s", e)
+
+    # --- slash commands --------------------------------------------------
+
+    def _register_slash_commands(self, app_commands) -> None:
+        """Wire `commands.py` handlers into Discord's CommandTree. The
+        decorators run synchronously here at start(); the actual handlers
+        are awaited when Discord delivers an Interaction."""
+        import discord
+        guild = discord.Object(id=self._guild_id)
+
+        @self._tree.command(
+            name="status",
+            description="Show sweep totals and per-trial table",
+            guild=guild,
+        )
+        async def status_cmd(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(thinking=True)
+            text = await asyncio.get_running_loop().run_in_executor(
+                None, cmd_mod.cmd_status, self._workspace,
+            )
+            await interaction.followup.send(_codeblock(text))
+
+        @self._tree.command(
+            name="stop", description="Cancel a single trial", guild=guild,
+        )
+        @app_commands.describe(index="Trial index to stop")
+        async def stop_cmd(interaction: discord.Interaction, index: int) -> None:
+            await interaction.response.defer(thinking=True)
+            text = await asyncio.get_running_loop().run_in_executor(
+                None, cmd_mod.cmd_stop, self._workspace, index,
+            )
+            await interaction.followup.send(text)
+
+        @self._tree.command(
+            name="stop_all", description="Cancel every live trial", guild=guild,
+        )
+        async def stop_all_cmd(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(thinking=True)
+            text = await asyncio.get_running_loop().run_in_executor(
+                None, cmd_mod.cmd_stop_all, self._workspace,
+            )
+            await interaction.followup.send(text)
+
+        @self._tree.command(
+            name="tail",
+            description="Last N lines of a trial's stderr log",
+            guild=guild,
+        )
+        @app_commands.describe(
+            index="Trial index",
+            lines="How many lines (default 20, max 1000)",
+        )
+        async def tail_cmd(
+            interaction: discord.Interaction,
+            index: int,
+            lines: int = 20,
+        ) -> None:
+            await interaction.response.defer(thinking=True)
+            text = await asyncio.get_running_loop().run_in_executor(
+                None, cmd_mod.cmd_tail, self._workspace, index, lines,
+            )
+            await interaction.followup.send(_codeblock(text))
+
+        @self._tree.command(
+            name="help", description="List of HerdDog commands", guild=guild,
+        )
+        async def help_cmd(interaction: discord.Interaction) -> None:
+            await interaction.response.send_message(cmd_mod.cmd_help())
+
+    # --- channel resolution ----------------------------------------------
 
     async def _resolve_or_create_channel(self) -> None:
         """Find the target channel inside the configured guild, creating
@@ -214,3 +329,12 @@ class DiscordChannel(MessageChannel):
                 f"Failed to create channel #{target_name}. The bot likely "
                 f"lacks 'Manage Channels' permission. ({e})"
             )
+
+
+def _codeblock(text: str) -> str:
+    """Wrap text in a Discord triple-backtick code block, truncating if
+    it would exceed Discord's 2000-char message limit."""
+    MAX_BODY = 1900  # leave room for fences + "(truncated)" line
+    if len(text) > MAX_BODY:
+        text = text[:MAX_BODY] + "\n... (truncated)"
+    return f"```\n{text}\n```"

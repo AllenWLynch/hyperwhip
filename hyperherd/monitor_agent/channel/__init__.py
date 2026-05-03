@@ -115,6 +115,7 @@ def _append_line(path: Path, line: str) -> None:
 def build_channel(
     workspace_config,
     sweep_name: str,
+    workspace: Path,
 ) -> Optional[MessageChannel]:
     """Inspect the workspace config and return a configured channel, or
     None if no channel is set up (in which case the daemon falls back to
@@ -143,6 +144,7 @@ def build_channel(
         token=token,
         guild_id=int(discord_cfg.guild_id),
         sweep_name=sweep_name,
+        workspace=workspace,
         channel_id=(
             int(discord_cfg.channel_id) if discord_cfg.channel_id else None
         ),
