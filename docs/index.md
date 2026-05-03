@@ -2,6 +2,9 @@
 
 **Hyperparameter sweeps on SLURM, run by an autonomous agent.** Declare your search in YAML, hand over a one-line launcher script, and walk away — [`herd monitor`](monitor.md) submits trials in stages, diagnoses failures, retries when SLURM can fix the problem, and posts only when it can't.
 
+!!! tip "Want to skip ahead?"
+    The repo ships [a complete MNIST sweep](example.md) you can clone and run as-is. PyTorch Lightning + Hydra trainer, 11 trials, all four condition forms in use. Two minutes from `git clone` to trials on the queue.
+
 ## What you write
 
 Two files in a workspace directory:
@@ -32,6 +35,7 @@ HyperHerd is opinionated. It assumes:
 
 <div class="grid cards" markdown>
 
+- **[Try the MNIST example](example.md)** — the fastest way to see HyperHerd work. Clone, install, run.
 - **[Autonomous monitor](monitor.md)** — start here if you want the agent runner. Setup, Discord channel, slash commands, failure triage.
 - **[Discord setup](discord-setup.md)** — one-time bot creation walkthrough.
 - **[Getting started](getting-started.md)** — install, scaffold, run your first sweep.

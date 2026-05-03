@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 
 [project]
 name = "hyperherd"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Launch and monitor hyperparameter optimization job arrays on SLURM"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -38,3 +38,14 @@ hyperherd = [
     "skills/*/SKILL.md",
     "monitor_agent/prompt/*.md",
 ]
+
+# Version is derived from git tags. A tagged commit (e.g. `v0.1.0`)
+# produces version `0.1.0`; untagged commits get a dev version like
+# `0.1.1.dev3+g4567abc`. The version is also written to a Python file
+# at build time so runtime code can `from hyperherd._version import
+# __version__` if needed. The file is generated, not committed —
+# .gitignore excludes it.
+[tool.setuptools_scm]
+version_file = "hyperherd/_version.py"
+# Map git tag `v0.1.0` -> PyPI version `0.1.0`.
+tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[a-z0-9.-]*)?)$"

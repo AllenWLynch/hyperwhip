@@ -66,6 +66,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Try the MNIST example: example.md
   - Autonomous monitor:
       - Overview: monitor.md
       - Discord setup: discord-setup.md
@@ -77,4 +78,4 @@ nav:
   - Commands: commands.md
   - Results & logging: results.md
   - Workspace layout: workspace.md
-  - Claude Code skills: claude-skill.md
+  - Claude Code skill: claude-skill.md

@@ -1,17 +1,25 @@
 # Getting started
 
+!!! tip "Skip the scaffolding"
+    Want to see HyperHerd run before you write any YAML? The repo ships [a complete MNIST sweep](example.md) you can clone and submit as-is. Two minutes from `git clone` to trials on the queue. Come back here once you want to set up your own.
+
 ## Installation
 
 ```bash
-pip install git+https://github.com/AllenWLynch/hyperherd.git
+# Base CLI (Python ≥ 3.8):
+pip install hyperherd
+
+# With the autonomous monitor (Python ≥ 3.10 — Discord, Claude Agent SDK):
+pip install 'hyperherd[monitor]'
 ```
 
-For local development:
+For development against an unreleased commit, install from the repo:
 
 ```bash
+pip install git+https://github.com/AllenWLynch/hyperherd.git
+# Or, for a local clone:
 git clone https://github.com/AllenWLynch/hyperherd.git
-cd hyperherd
-pip install -e .
+cd hyperherd && pip install -e .
 ```
 
 ### Install the Claude Code skill

@@ -33,3 +33,6 @@ examples/*/logs/
 
 # Per-workspace agent state created by `herd monitor`
 examples/*/.claude/
+
+# setuptools_scm-generated version file (derived from git tags at build time)
+hyperherd/_version.py

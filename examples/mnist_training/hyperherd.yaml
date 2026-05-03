@@ -17,8 +17,12 @@ static_overrides:
   - "data_dir=./data/mnist"
   - "accelerator=auto"
 
-discord:
-  guild_id: "1500357438547955863"
+# Optional: enable the autonomous monitor's Discord channel. Walk through
+# docs/discord-setup.md once to mint a bot, then put your server's ID here.
+# Without this block, `herd monitor` still runs (failure triage, resubmits,
+# etc.) but has no chat surface to post status messages to.
+# discord:
+#   guild_id: "1234567890123456789"
 
 parameters:
   learning_rate:

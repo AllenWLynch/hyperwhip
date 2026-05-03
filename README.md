@@ -19,7 +19,7 @@
 
 ```bash
 # Install (Python 3.8+ for the base CLI)
-pip install git+https://github.com/AllenWLynch/hyperherd.git
+pip install hyperherd
 
 # Install the Claude Code skill for authoring sweep configs
 herd install-skill
@@ -56,3 +56,18 @@ herd monitor my_experiment
 - Python ≥ 3.8 for the base `herd` CLI
 - Python ≥ 3.10 for the `[monitor]` extras (the autonomous monitor — Discord, Claude Agent SDK)
 - A SLURM cluster with `sbatch`, `sacct`, `squeue`, `scancel` on the submission host
+
+## Releasing
+
+Versions are derived from git tags via `setuptools_scm` — there's nothing to bump in `pyproject.toml`. To cut a release:
+
+```bash
+git tag -a v0.1.0 -m "first release"
+git push origin v0.1.0
+```
+
+The `Publish to PyPI` GitHub Action picks up the tag, builds an sdist + wheel with version `0.1.0`, verifies the built version matches the tag, and uploads to PyPI via Trusted Publisher (OIDC — no API token in repo secrets).
+
+One-time PyPI setup before the first release:
+1. Create the `hyperherd` project on [PyPI](https://pypi.org).
+2. In the project's "Publishing" settings, add a Trusted Publisher: owner `AllenWLynch`, repo `hyperherd`, workflow `publish.yml`, environment `pypi`.
