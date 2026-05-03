@@ -89,9 +89,11 @@ def _audit(event: str, **fields: Any) -> None:
 
 @tool(
     "read_state",
-    "Return the per-tick state snapshot: totals, every trial's status and metrics, "
-    "newly-failed trials with stderr tails, newly-completed trials, and any user "
-    "messages received via Discord since the last tick. Call this first.",
+    "Return the full per-tick state dict — totals, every trial's status and "
+    "metrics, newly-failed with stderr, newly-completed, inbox, chat_history. "
+    "The summary fields are already in the per-tick user message; call this "
+    "ONLY when you need data the summary omits, like the per-trial table for "
+    "live-phase decisions or to re-check after a long tool chain.",
     {},
 )
 async def read_state() -> Dict[str, Any]:
@@ -101,8 +103,9 @@ async def read_state() -> Dict[str, Any]:
 
 @tool(
     "read_plan",
-    "Return the contents of MONITOR_PLAN.md (the agent's cross-tick notepad). "
-    "Empty string if the plan doesn't exist yet (first tick after `herd monitor-v2 init`).",
+    "Return MONITOR_PLAN.md contents. Skip this at tick start — the plan is "
+    "already in the user message. Use it after `write_plan` if you need to "
+    "verify what was saved.",
     {},
 )
 async def read_plan() -> str:
