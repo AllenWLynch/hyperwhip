@@ -9,10 +9,6 @@ next tick.
 This page is the one-time setup. After it's done you only need to set the
 guild ID in each sweep's `hyperherd.yaml`.
 
-!!! note "Experimental"
-    Discord support is part of the v2 monitor daemon (`herd monitor-v2`).
-    The current `herd monitor` doesn't use it.
-
 ## 1. Create the bot
 
 1. Go to <https://discord.com/developers/applications> and click
@@ -78,7 +74,7 @@ discord:
 ## 6. Run
 
 ```bash
-herd monitor-v2 my-sweep/
+herd monitor my-sweep/
 ```
 
 The daemon connects, finds-or-creates the channel, posts a startup-style
@@ -151,7 +147,7 @@ channel manually and pin it via `discord.channel_id`.
 
 **Daemon prints "DISCORD_BOT_TOKEN is not in the environment"** — the
 env var didn't propagate to the daemon's shell. Source it in the same
-shell you launch `herd monitor-v2` from.
+shell you launch `herd monitor` from.
 
 **No reply lands in the inbox** — the bot doesn't have the *MESSAGE
 CONTENT INTENT* enabled in the Developer Portal (step 1.3). Discord

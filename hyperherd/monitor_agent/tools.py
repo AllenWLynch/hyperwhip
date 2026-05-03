@@ -238,45 +238,29 @@ async def stop_all(args: Dict[str, Any]) -> Dict[str, Any]:
 async def msg(args: Dict[str, Any]) -> Dict[str, Any]:
     text = args["text"]
     channel = _CTX.get("channel")
-    if channel is not None:
-        try:
-            await channel.post(text)
-            _audit("msg", text=text[:200], via=channel.name)
-            record_chat_entry(
-                Path(_CTX["workspace"]),
-                role="agent", text=text, via=channel.name, author="Herd dog",
-            )
-            return _text_response({"posted": True, "via": channel.name})
-        except Exception as e:
-            _audit("msg_failed", error=str(e), via=channel.name)
-            return _text_response(
-                {"posted": False, "error": str(e), "via": channel.name},
-                is_error=True,
-            )
-
-    from hyperherd import watch
-    from hyperherd.config import load_config
-    config = load_config(str(_CTX["workspace"]))
-    webhook = config.watch.webhook
-    fmt = config.watch.format
-    if not webhook:
-        webhook, _ = watch.resolve_default_webhook(config.workspace, config.name)
-        fmt = "ntfy"
-
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(
-            None, lambda: watch.post_message(webhook, fmt, text, config.name)
+    if channel is None:
+        # No chat surface configured — message has nowhere to go. Audit
+        # it so it's still in the JSONL log, return a soft failure to
+        # the agent rather than crashing the tick.
+        _audit("msg_skipped_no_channel", text=text[:200])
+        return _text_response(
+            {"posted": False, "reason": "no chat channel configured"},
+            is_error=True,
         )
-    except OSError as e:
-        _audit("msg_failed", error=str(e))
-        return _text_response({"posted": False, "error": str(e)}, is_error=True)
-    _audit("msg", text=text[:200], via="webhook")
-    record_chat_entry(
-        Path(_CTX["workspace"]),
-        role="agent", text=text, via="webhook", author="Herd dog",
-    )
-    return _text_response({"posted": True, "via": "webhook", "webhook": webhook})
+    try:
+        await channel.post(text)
+        _audit("msg", text=text[:200], via=channel.name)
+        record_chat_entry(
+            Path(_CTX["workspace"]),
+            role="agent", text=text, via=channel.name, author="Herd dog",
+        )
+        return _text_response({"posted": True, "via": channel.name})
+    except Exception as e:
+        _audit("msg_failed", error=str(e), via=channel.name)
+        return _text_response(
+            {"posted": False, "error": str(e), "via": channel.name},
+            is_error=True,
+        )
 
 
 @tool(
@@ -290,37 +274,22 @@ async def msg(args: Dict[str, Any]) -> Dict[str, Any]:
 async def tick_summary(args: Dict[str, Any]) -> Dict[str, Any]:
     text = args["text"]
     channel = _CTX.get("channel")
-    if channel is not None:
-        try:
-            await channel.post(text)
-            _audit("tick_summary", text=text[:200], via=channel.name)
-            return _text_response({"posted": True, "via": channel.name})
-        except Exception as e:
-            _audit("tick_summary_failed", error=str(e), via=channel.name)
-            return _text_response(
-                {"posted": False, "error": str(e), "via": channel.name},
-                is_error=True,
-            )
-
-    from hyperherd import watch
-    from hyperherd.config import load_config
-    config = load_config(str(_CTX["workspace"]))
-    webhook = config.watch.webhook
-    fmt = config.watch.format
-    if not webhook:
-        webhook, _ = watch.resolve_default_webhook(config.workspace, config.name)
-        fmt = "ntfy"
-
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(
-            None, lambda: watch.post_message(webhook, fmt, text, config.name)
+    if channel is None:
+        _audit("tick_summary_skipped_no_channel", text=text[:200])
+        return _text_response(
+            {"posted": False, "reason": "no chat channel configured"},
+            is_error=True,
         )
-    except OSError as e:
-        _audit("tick_summary_failed", error=str(e))
-        return _text_response({"posted": False, "error": str(e)}, is_error=True)
-    _audit("tick_summary", text=text[:200], via="webhook")
-    return _text_response({"posted": True, "via": "webhook", "webhook": webhook})
+    try:
+        await channel.post(text)
+        _audit("tick_summary", text=text[:200], via=channel.name)
+        return _text_response({"posted": True, "via": channel.name})
+    except Exception as e:
+        _audit("tick_summary_failed", error=str(e), via=channel.name)
+        return _text_response(
+            {"posted": False, "error": str(e), "via": channel.name},
+            is_error=True,
+        )
 
 
 # --- chat history ----------------------------------------------------------

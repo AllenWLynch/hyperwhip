@@ -34,9 +34,12 @@ Should print the available subcommands.
 
 ### Dependencies
 
-- Python ≥ 3.8
+- Python ≥ 3.8 for the base `herd` CLI
+- Python ≥ 3.10 for the `[monitor]` extras (autonomous monitor daemon — Discord, Claude Agent SDK)
 - [PyYAML](https://pyyaml.org/) and [Pydantic](https://docs.pydantic.dev/) ≥ 2.0 (installed automatically)
 - A SLURM cluster with `sbatch`, `sacct`, `squeue`, and `scancel` on the submission host
+
+The trial training environment (where SLURM jobs run) only needs the base package — no Python 3.10 requirement, no monitor deps.
 
 ## Your first sweep
 
@@ -94,10 +97,13 @@ herd tail 3
 For anything longer than a few minutes, let the [autonomous monitor](monitor.md) operate the sweep for you:
 
 ```bash
+pip install 'hyperherd[monitor]'   # one-time, on the daemon machine
 herd monitor
 ```
 
-The agent walks you through a short setup interview (metric source, success metric, whether to auto-bump mem/time on failure), then handles staged rollout, failure triage, and per-tick status messages on your phone — you walk away. Wrap in `tmux` to keep it running after you log out:
+The daemon connects to Discord (one-time bot setup — see [Discord setup](discord-setup.md)), creates a channel for the sweep, walks you through a 3-question setup interview (metric, remediation policy, metric source), then handles staged rollout and failure triage. You direct it from the channel via slash commands or by `@`-mentioning the bot.
+
+Wrap in `tmux` to keep it running after you log out:
 
 ```bash
 tmux new -s monitor 'herd monitor'

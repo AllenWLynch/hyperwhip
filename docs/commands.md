@@ -238,83 +238,6 @@ Calls `scancel <jobid>_<index>` and updates the manifest to `cancelled`. Pass ei
 }
 ```
 
-## `herd watch`
-
-Poll the manifest and post trial state changes to a webhook (Slack, Discord, ntfy.sh, or any URL that accepts a POST).
-
-```bash
-herd watch [WORKSPACE] [--once] [--pidfile PATH]
-```
-
-All settings come from the `watch:` block in `hyperherd.yaml` — webhook URL, payload format, poll interval, heartbeat cadence, which events to deliver, and the optional Claude-summary flag. See [watch](configuration.md#watch) for the full field reference.
-
-`herd watch` runs in the **foreground** and logs one event line per tick to stdout (`[2026-05-01T14:23:10Z] sweep_done — ...`), so a redirected log gives you a clean event journal.
-
-| Flag | Description |
-|------|-------------|
-| `--once` | Run a single poll and exit. Use this with `cron`/`systemd timer` if you'd rather schedule polling externally. |
-| `--pidfile PATH` | Write the daemon PID to `PATH` for external supervisors / kill scripts. |
-
-### Running persistently on a login node
-
-The cluster-friendly recipe is `nohup` + `--pidfile`: the daemon survives logout, the redirected log doubles as the event journal, and the pidfile gives you a single place to look the process up later.
-
-```bash
-cd ~/sweeps/mnist_sweep
-
-nohup herd watch \
-    --pidfile .hyperherd/watch.pid \
-    > .hyperherd/watch.log 2>&1 &
-
-disown   # detach from this shell so logout won't HUP it
-```
-
-Check that it's still running:
-
-```bash
-ps -p "$(cat .hyperherd/watch.pid)"
-tail -f .hyperherd/watch.log
-```
-
-Stop it cleanly:
-
-```bash
-kill "$(cat .hyperherd/watch.pid)"
-```
-
-The daemon removes its own pidfile on shutdown. If a stale pidfile is left behind (e.g. after `kill -9`) and `ps` says the PID isn't running, just `rm .hyperherd/watch.pid`.
-
-Prefer an interactive session you can reattach to? `tmux new -d -s watch 'herd watch'` and `tmux attach -t watch` work too — but you lose the pidfile + redirected log, so you have to remember the session name.
-
-### Zero-config setup
-
-If `watch.webhook` is unset (or the entire `watch:` block is missing), `herd watch` generates a random `https://ntfy.sh/herd-{slug}-{random}` topic on first run, persists it in the workspace, and prints the URL with subscribe instructions:
-
-```
-watch.webhook is unset — falling back to a per-workspace ntfy.sh topic.
-
-    https://ntfy.sh/herd-mnist_sweep-7Hf3kPzQ8w
-
-Subscribe by either:
-  • Open the URL in a browser
-  • iOS/Android: install the ntfy app and add the topic
-  • curl -s https://ntfy.sh/herd-mnist_sweep-7Hf3kPzQ8w/json
-```
-
-The same URL is reused across daemon restarts. Anyone with the URL can read the notifications, so use a private webhook for sensitive sweeps.
-
-### Defaults at a glance
-
-With no `watch:` block in your config, you get:
-
-- 60 s poll interval
-- Per-trial alert on `failed` / `cancelled`, annotated with the SLURM cause (`TIMEOUT`, `OUT_OF_MEMORY`, `SIGSEGV`, `exit code 1`, ...) and the tail of the trial's stderr
-- A `done` notification when the sweep finishes
-- A heartbeat digest every 5 minutes (suppressed if nothing changed)
-- Posted to the auto-generated ntfy.sh topic
-
-Override any of those by adding a `watch:` block — see the [configuration reference](configuration.md#watch). Failure payload shape and the optional Claude diagnosis are documented under [Failure diagnosis](configuration.md#failure-diagnosis).
-
 ## `herd snapshot`
 
 Bundle every read-style command's output (status + sacct + logged metrics + per-trial last-log line + recent failed-trial stderr) into a single JSON document.
@@ -365,40 +288,22 @@ Shape:
 
 ## `herd monitor`
 
-Hand the sweep to a Claude Code agent. See the [Autonomous monitor](monitor.md) page for the full picture; this is the command reference.
+Run the autonomous monitor daemon. Connects to Discord, runs the boot interview, operates the sweep until it halts. See [Autonomous monitor](monitor.md) for the full picture.
 
 ```bash
-herd monitor [WORKSPACE] [--no-watch] [--no-auto-allow]
-herd monitor --stop
+herd monitor [WORKSPACE] [flags]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--no-watch` | Don't start `herd watch` (use if one is already running for this workspace) |
-| `--no-auto-allow` | Require interactive permission approval for every agent tool call (defeats unattended operation) |
-| `--stop` | Stop the background `herd watch` for this workspace |
+| `--once` | Run exactly one tick and exit (live — calls the model once) |
+| `--dry-run` | Assemble the per-tick state and render the prompt without calling the model. For verifying the deterministic path before paying tokens. |
+| `--trigger {scheduled,failure,completion,user_message,boot}` | Trigger for `--once` / `--dry-run` (daemon mode picks its own) |
+| `--max-ticks N` | Stop after N ticks (safety cap for testing) |
 
-Wrap in tmux to outlive your shell: `tmux new -s monitor 'herd monitor'`. Stop everything with `herd monitor --stop`.
+If `WORKSPACE/.hyperherd` doesn't exist, the daemon auto-initializes the manifest first (equivalent to `herd run --dry-run`) so the agent has trial state to read from its first tick.
 
-## `herd msg`
-
-Post a free-text message to the same webhook `herd watch` is using.
-
-```bash
-herd msg [-w WORKSPACE] MESSAGE...
-```
-
-Useful for narrating a sweep alongside the daemon's automatic events — "kicked off the rerun", "ignore the next failure, that's me killing trial 7", "out for the night, ping me on completion". The message is rendered with the same `[<sweep>] ...` prefix as daemon events and goes to whichever channel `watch.webhook`/`watch.format` resolve to (Slack, Discord, ntfy, or the zero-config per-workspace ntfy topic).
-
-```bash
-cd ~/sweeps/mnist_sweep
-herd msg "rerunning failed trials with --force"
-
-# From outside the workspace:
-herd msg -w ~/sweeps/mnist_sweep "heads up — moving to a different partition"
-```
-
-Unlike `herd watch`, delivery errors are surfaced (non-zero exit, error printed) so you know the message didn't actually go out.
+Requires Python 3.10+ and the `[monitor]` extras (`pip install 'hyperherd[monitor]'`). Discord setup is one-time per server — see [Discord setup](discord-setup.md).
 
 ## `herd clean`
 

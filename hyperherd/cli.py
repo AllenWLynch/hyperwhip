@@ -711,304 +711,20 @@ def cmd_clean(args):
     return 0
 
 
-def cmd_watch(args):
-    """Poll the manifest and post trial state changes to a webhook.
-
-    Settings come from the `watch:` block in hyperherd.yaml (webhook URL,
-    format, interval, heartbeat, events). Foreground process — wrap in
-    `nohup`, `tmux`, or `screen` to outlive your shell.
-    """
-    from hyperherd import watch
-
-    config = load_config(args.workspace)
-
-    if not manifest.workspace_exists(config.workspace):
-        print("No workspace found. Run 'herd run' first.", file=sys.stderr)
-        return 1
-
-    try:
-        watch.run(config, once=args.once, pidfile=args.pidfile)
-    except watch.WatchError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    return 0
-
-
-_MONITOR_INITIAL_PROMPT_TEMPLATE = (
-    "Use the hyperherd-monitor skill to manage the sweep at {workspace}.\n"
-    "Run the setup interview, kick off the phased rollout, then `/loop` "
-    "(no interval — self-pace via ScheduleWakeup per the skill's cadence "
-    "selection table; tight during rollout, long when the sweep is stable)."
-)
-
-
-# Allow-rules `herd monitor` writes to <workspace>/.claude/settings.local.json
-# so the agent's per-tick toolbox doesn't trigger a permission prompt every
-# few minutes. Scope is the agent's full toolbox by design — herd
-# subcommands, JSON-extraction helpers (jq + python the agent will inevitably
-# reach for), and files inside this workspace.
-_MONITOR_ALLOW_RULES = [
-    # First-class HyperHerd surface
-    "Bash(herd *)",
-    "Bash(jq *)",
-    # Common shell utilities the agent naturally reaches for. Erring broad
-    # here on purpose — the alternative is the agent stalling on a permission
-    # prompt mid-tick because it pipelined through `tee` or `head`. The skill
-    # tells the agent that off-list commands require a `herd msg` warning to
-    # the user first so the session never blocks silently.
-    "Bash(cat *)",
-    "Bash(head *)",
-    "Bash(tail *)",
-    "Bash(tee *)",
-    "Bash(grep *)",
-    "Bash(sed *)",
-    "Bash(awk *)",
-    "Bash(cut *)",
-    "Bash(tr *)",
-    "Bash(sort *)",
-    "Bash(uniq *)",
-    "Bash(wc *)",
-    "Bash(ls *)",
-    "Bash(find *)",
-    "Bash(echo *)",
-    "Bash(printf *)",
-    "Bash(date *)",
-    "Bash(diff *)",
-    "Bash(comm *)",
-    "Bash(mkdir *)",
-    "Bash(cp *)",
-    "Bash(mv *)",
-    "Bash(touch *)",
-    "Bash(test *)",
-    # Workspace files
-    "Edit(/hyperherd.yaml)",
-    "Read(.hyperherd/**)",
-    "Write(.hyperherd/**)",
-    "Edit(.hyperherd/**)",
-]
-
-
-def _ensure_monitor_settings(workspace: str) -> tuple[str, list[str]]:
-    """Merge `_MONITOR_ALLOW_RULES` into `<workspace>/.claude/settings.local.json`.
-
-    Returns (settings_path, newly_added_rules). Existing rules are preserved
-    by string-equality dedup; the rest of the file (other keys, deny lists,
-    etc.) is left alone so this is safe to run on a workspace that already
-    has settings.
-    """
-    settings_dir = os.path.join(workspace, ".claude")
-    settings_path = os.path.join(settings_dir, "settings.local.json")
-    os.makedirs(settings_dir, exist_ok=True)
-
-    if os.path.isfile(settings_path):
-        try:
-            with open(settings_path, "r") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            # Corrupt / unreadable — back it up rather than overwrite blindly.
-            backup = settings_path + ".bak"
-            try:
-                shutil.copyfile(settings_path, backup)
-            except OSError:
-                pass
-            data = {}
-    else:
-        data = {}
-
-    perms = data.setdefault("permissions", {})
-    allow = perms.setdefault("allow", [])
-    if not isinstance(allow, list):
-        allow = []
-        perms["allow"] = allow
-
-    added = []
-    for rule in _MONITOR_ALLOW_RULES:
-        if rule not in allow:
-            allow.append(rule)
-            added.append(rule)
-
-    with open(settings_path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    return settings_path, added
-
-
-def _spawn_watch_background(workspace: str) -> tuple[int, str, str]:
-    """Spawn `herd watch` as a background daemon.
-
-    Uses the same nohup+pidfile recipe documented for the standalone command.
-    Returns (pid, pidfile_path, log_path). Raises FileExistsError if a watch
-    is already running for this workspace.
-    """
-    import subprocess
-
-    ws_dir = manifest.workspace_path(workspace)
-    pidfile = os.path.join(ws_dir, "watch.pid")
-    log_path = os.path.join(ws_dir, "watch.log")
-
-    if os.path.isfile(pidfile):
-        try:
-            with open(pidfile) as f:
-                stale_pid = int(f.read().strip())
-            os.kill(stale_pid, 0)  # signal 0 = "are you alive?"
-        except (OSError, ValueError):
-            # Stale pidfile (process gone or unreadable). Reclaim it.
-            try:
-                os.unlink(pidfile)
-            except OSError:
-                pass
-        else:
-            raise FileExistsError(
-                f"watch already running (PID {stale_pid}, pidfile {pidfile})"
-            )
-
-    os.makedirs(ws_dir, exist_ok=True)
-    log_fp = open(log_path, "ab")
-    proc = subprocess.Popen(
-        ["herd", "watch", "--pidfile", pidfile, workspace],
-        stdout=log_fp,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,  # detach from this controlling terminal
-    )
-    log_fp.close()
-    return proc.pid, pidfile, log_path
-
-
 def cmd_monitor(args):
-    """Start the agent-driven sweep monitor.
+    """Run the autonomous monitor daemon.
 
-    Spawns `herd watch` in the background (unless `--no-watch`), prints the
-    initial prompt the user should paste into Claude Code, and then `exec`s
-    `claude` so the user lands directly in an interactive session. The user
-    wraps the whole thing in tmux/screen if they want it to outlive their
-    shell — same recipe as `herd watch`.
-
-    `--stop` is the inverse: kills the background watch (if any) and exits.
-    The Claude Code session is the user's terminal, so it dies when they
-    close it; this command doesn't try to track or kill claude PIDs.
-    """
-    config = load_config(args.workspace)
-
-    if args.stop:
-        ws_dir = manifest.workspace_path(config.workspace)
-        pidfile = os.path.join(ws_dir, "watch.pid")
-        if not os.path.isfile(pidfile):
-            print("No background watch is running for this workspace.")
-            return 0
-        try:
-            with open(pidfile) as f:
-                pid = int(f.read().strip())
-            os.kill(pid, 15)  # SIGTERM
-            print(f"Sent SIGTERM to watch (PID {pid}).")
-        except (OSError, ValueError) as e:
-            print(f"Could not stop watch: {e}", file=sys.stderr)
-            try:
-                os.unlink(pidfile)
-            except OSError:
-                pass
-            return 1
-        # The watch daemon removes its own pidfile on shutdown.
-        return 0
-
-    if not manifest.workspace_exists(config.workspace):
-        print(
-            "No workspace found. Run 'herd run' (even just '--dry-run') first "
-            "so there's a manifest to monitor.",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Resolve (and persist) the ntfy fallback topic NOW, before spawning
-    # watch or exec'ing claude. Without this, watch's subprocess-cold-start
-    # delay means the agent's first `herd msg` could race in and mint a
-    # different topic — and you'd end up with watch posting to one channel
-    # and the agent posting to another.
-    if not config.watch.webhook:
-        from hyperherd import watch
-        url, _ = watch.resolve_default_webhook(config.workspace, config.name)
-        print(f"Webhook (ntfy fallback): {url}")
-        print("  Subscribe by pasting that URL into the ntfy iOS/Android app,")
-        print("  or open it in a browser to watch live.")
-        print()
-
-    if not args.no_watch:
-        try:
-            pid, pidfile, log_path = _spawn_watch_background(config.workspace)
-        except FileExistsError as e:
-            print(f"Note: {e}. Skipping watch start.", file=sys.stderr)
-        else:
-            print(f"Started herd watch in background (PID {pid}).")
-            print(f"  pidfile: {pidfile}")
-            print(f"  log:     {log_path}")
-            print(f"  stop:    herd monitor --stop  (or kill $(cat {pidfile}))")
-            print()
-
-    if not args.no_auto_allow:
-        settings_path, added = _ensure_monitor_settings(config.workspace)
-        if added:
-            print(f"Added {len(added)} permission rule(s) to {settings_path}:")
-            for rule in added:
-                print(f"  + {rule}")
-            print(
-                "These pre-approve the agent's tool calls so it can run "
-                "unattended. Pass --no-auto-allow to skip."
-            )
-        else:
-            print(f"Workspace {settings_path} already has the monitor allow-rules.")
-        print()
-
-    prompt = _MONITOR_INITIAL_PROMPT_TEMPLATE.format(
-        workspace=os.path.abspath(config.workspace),
-    )
-
-    # Stash the prompt as an audit trail — useful for debugging what the
-    # agent was actually told to do on a given run, even though the user
-    # doesn't need to paste it (`claude "<prompt>"` injects it directly).
-    prompt_path = os.path.join(manifest.workspace_path(config.workspace),
-                               "monitor-prompt.txt")
-    try:
-        with open(prompt_path, "w") as f:
-            f.write(prompt + "\n")
-    except OSError:
-        prompt_path = None
-
-    print("Starting Claude Code with the monitor agent...")
-    print(f"  prompt: {prompt_path}" if prompt_path else "")
-    print(
-        "  detach: close the terminal (watch keeps running); "
-        "wrap in `tmux new -s monitor 'herd monitor'` to keep the session alive."
-    )
-    print()
-
-    # `claude "<prompt>"` (without -p) starts an interactive session with
-    # the prompt already running as the first user turn. -p is one-shot and
-    # would defeat the persistent /loop pattern.
-    try:
-        os.execvp("claude", ["claude", prompt])
-    except FileNotFoundError:
-        print(
-            f"Error: `claude` not on PATH. Install Claude Code "
-            f"(https://claude.com/claude-code) or run "
-            f"`claude \"$(cat {prompt_path or '<prompt>'})\"` from a host that has it.",
-            file=sys.stderr,
-        )
-        return 1
-
-
-def cmd_monitor_v2(args):
-    """Experimental: agent-SDK-based monitor daemon.
-
-    Phase-1 entrypoint. Supports `--once` (run a single tick and exit) and
-    `--dry-run` (assemble state and render the prompt without calling the
-    Anthropic API, for verifying the deterministic path).
+    Connects to Discord (if configured), runs the boot interview, and
+    operates the sweep until it halts. Supports `--once` (run a single
+    tick and exit) and `--dry-run` (assemble state and render the prompt
+    without calling the model, for verifying the deterministic path).
     """
     import asyncio
 
     workspace = args.workspace
     if not manifest.workspace_exists(workspace):
         # Auto-initialize so the cold-start UX is seamless: drop a
-        # hyperherd.yaml, `herd monitor-v2`, daemon launches, and the
+        # hyperherd.yaml, `herd monitor`, daemon launches, and the
         # agent runs the boot interview against a freshly-materialized
         # greenfield workspace. Equivalent to `herd run --dry-run`.
         print(f"No workspace at {workspace} — initializing manifest "
@@ -1075,40 +791,6 @@ def cmd_monitor_v2(args):
     )
     if outcome.halted:
         print(f"Agent halted: {outcome.halt_reason or '(no reason)'}")
-    return 0
-
-
-def cmd_msg(args):
-    """Post a free-text message to the watch webhook configured for this
-    workspace (or its zero-config ntfy fallback). Lets you announce things
-    like 'sweep started' or 'manual restart' alongside the daemon's events.
-    """
-    from hyperherd import watch
-
-    config = load_config(args.workspace)
-
-    if not manifest.workspace_exists(config.workspace):
-        print("No workspace found. Run 'herd run' first.", file=sys.stderr)
-        return 1
-
-    text = " ".join(args.message).strip()
-    if not text:
-        print("Error: empty message.", file=sys.stderr)
-        return 1
-
-    webhook = config.watch.webhook
-    fmt = config.watch.format
-    if not webhook:
-        webhook, _ = watch.resolve_default_webhook(config.workspace, config.name)
-        fmt = "ntfy"
-
-    try:
-        watch.post_message(webhook, fmt, text, config.name)
-    except OSError as e:
-        print(f"Error: webhook POST failed: {e}", file=sys.stderr)
-        return 1
-
-    print(f"Posted to {webhook}")
     return 0
 
 
@@ -1446,73 +1128,29 @@ def main():
     p_stop.add_argument("index", nargs="?", type=int, default=None, help="Trial index to cancel")
     p_stop.add_argument("-a", "--all", action="store_true", help="Cancel every running/queued trial in the workspace")
 
-    # watch — polling daemon that posts trial state changes to a webhook
-    p_watch = subparsers.add_parser(
-        "watch",
-        help="Poll trial state and post events to the webhook from hyperherd.yaml",
-    )
-    p_watch.add_argument(
-        "workspace", nargs="?", default=".",
-        help="Workspace directory (default: current dir)",
-    )
-    p_watch.add_argument(
-        "--once", action="store_true",
-        help="Run a single poll and exit (for cron-driven setups)",
-    )
-    p_watch.add_argument(
-        "--pidfile", default=None,
-        help="Write the daemon PID here (for external supervisors / kill scripts)",
-    )
-
-    # monitor — start the agent-driven sweep monitor (watch + Claude Code)
+    # monitor — autonomous monitor daemon (Claude Agent SDK + Discord)
     p_monitor = subparsers.add_parser(
         "monitor",
-        help="Start the agent-driven sweep monitor (background watch + Claude Code)",
+        help="Run the autonomous monitor daemon",
     )
     p_monitor.add_argument(
         "workspace", nargs="?", default=".",
         help="Workspace directory (default: current dir)",
     )
     p_monitor.add_argument(
-        "--no-watch", action="store_true",
-        help="Don't spawn `herd watch` in the background (assume one is already running)",
-    )
-    p_monitor.add_argument(
-        "--no-auto-allow", action="store_true",
-        help=(
-            "Don't write monitor allow-rules to <workspace>/.claude/settings.local.json. "
-            "Without these rules Claude Code will prompt before each tool call, "
-            "which defeats unattended operation."
-        ),
-    )
-    p_monitor.add_argument(
-        "--stop", action="store_true",
-        help="Stop the background watch for this workspace and exit (does not touch Claude Code sessions)",
-    )
-
-    # monitor-v2 — experimental: agent-SDK-based monitor (Phases 1-2 of PLAN.md).
-    p_mv2 = subparsers.add_parser(
-        "monitor-v2",
-        help="(experimental) Agent-SDK-based monitor daemon",
-    )
-    p_mv2.add_argument(
-        "workspace", nargs="?", default=".",
-        help="Workspace directory (default: current dir)",
-    )
-    p_mv2.add_argument(
         "--once", action="store_true",
         help="Run exactly one tick and exit (live — calls the model)",
     )
-    p_mv2.add_argument(
+    p_monitor.add_argument(
         "--dry-run", action="store_true",
         help="Assemble state + render the prompt; no model call. Use this to verify the deterministic path before paying for tokens.",
     )
-    p_mv2.add_argument(
+    p_monitor.add_argument(
         "--trigger", default="boot",
         choices=["scheduled", "failure", "completion", "user_message", "boot"],
         help="Trigger for --once / --dry-run (daemon mode picks its own)",
     )
-    p_mv2.add_argument(
+    p_monitor.add_argument(
         "--max-ticks", type=int, default=None,
         help="Stop the daemon after N ticks (safety cap for testing)",
     )
@@ -1535,20 +1173,6 @@ def main():
         help="Max number of failed trials to include stderr for (default: 20)",
     )
 
-    # msg — post a free-text message to the same webhook
-    p_msg = subparsers.add_parser(
-        "msg",
-        help="Post a free-text message to the watch webhook",
-    )
-    p_msg.add_argument(
-        "-w", "--workspace", default=".",
-        help="Workspace directory (default: current dir)",
-    )
-    p_msg.add_argument(
-        "message", nargs="+",
-        help="Message text (quote multi-word messages)",
-    )
-
     # clean
     p_clean = subparsers.add_parser("clean", help="Cancel jobs and clean up workspace")
     p_clean.add_argument("workspace", nargs="?", default=".", help="Workspace directory (default: current dir)")
@@ -1558,7 +1182,7 @@ def main():
     # install-skill
     p_skill = subparsers.add_parser(
         "install-skill",
-        help="Install bundled Claude Code skills (hyperherd-config, hyperherd-monitor)",
+        help="Install the bundled hyperherd-config Claude Code skill",
     )
     p_skill.add_argument(
         "--scope",
@@ -1604,11 +1228,8 @@ def main():
         "res": cmd_results,
         "stop": cmd_stop,
         "clean": cmd_clean,
-        "watch": cmd_watch,
         "monitor": cmd_monitor,
-        "monitor-v2": cmd_monitor_v2,
         "snapshot": cmd_snapshot,
-        "msg": cmd_msg,
         "install-skill": cmd_install_skill,
         "dog": cmd_dog,
     }

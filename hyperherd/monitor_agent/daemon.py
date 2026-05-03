@@ -316,8 +316,8 @@ async def _post_final_message(
     halt_reason: Optional[str],
     stopped_by_signal: bool,
 ) -> None:
-    """Post a 'daemon stopped' notification. Routes through the channel
-    if configured, else falls back to the watch webhook. Best-effort."""
+    """Post a 'daemon stopped' notification through the channel.
+    Best-effort: failures are logged but don't propagate."""
     if stopped_by_signal:
         reason_text = "stopped by signal"
     elif halted:
@@ -331,29 +331,11 @@ async def _post_final_message(
         f"Won't post again unless you restart it."
     )
 
-    if channel is not None:
-        try:
-            await channel.post(body)
-            log.info("Posted daemon-stopped notification via channel.")
-            return
-        except Exception as e:
-            log.warning("Channel post failed; falling back to webhook: %s", e)
-
+    if channel is None:
+        log.info("No channel configured; skipping final-stop notification.")
+        return
     try:
-        from hyperherd import watch
-        from hyperherd.config import load_config
-
-        config = load_config(str(workspace))
-        webhook = config.watch.webhook
-        fmt = config.watch.format
-        if not webhook:
-            webhook, _ = watch.resolve_default_webhook(config.workspace, config.name)
-            fmt = "ntfy"
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, lambda: watch.post_message(webhook, fmt, body, config.name)
-        )
-        log.info("Posted daemon-stopped notification via webhook.")
+        await channel.post(body)
+        log.info("Posted daemon-stopped notification via channel.")
     except Exception as e:
         log.warning("Failed to post daemon-stopped notification: %s", e)

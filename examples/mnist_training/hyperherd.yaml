@@ -17,13 +17,6 @@ static_overrides:
   - "data_dir=./data/mnist"
   - "accelerator=auto"
 
-watch:
-    format: ntfy
-    interval_seconds: 30
-    events: [failed, done, heartbeat]
-    heartbeat_minutes: 1
-    summarize: true
-
 discord:
   guild_id: "1500357438547955863"
 

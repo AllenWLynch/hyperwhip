@@ -1,7 +1,6 @@
-"""Agent-SDK-based monitor daemon (v2).
+"""Autonomous monitor daemon — the engine behind `herd monitor`.
 
-Replaces the Claude Code + dynamic /loop architecture with a Python daemon
-built on the Claude Agent SDK. See PLAN.md at the repo root for the full
-design. This package is opt-in via `pip install hyperherd[monitor]` and the
-`herd monitor-v2` CLI subcommand.
+A Python daemon built on the Claude Agent SDK that operates a HyperHerd
+sweep on the user's behalf: staged rollout, failure triage, two-way
+Discord channel for control. Opt-in via `pip install hyperherd[monitor]`.
 """

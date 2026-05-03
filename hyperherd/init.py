@@ -28,18 +28,13 @@ launcher: ./launch.sh
 # static_overrides:
 #   - "data.path=/scratch/datasets"
 
-# `herd watch` posts trial state changes to a webhook (Slack/Discord/ntfy/
-# anything that accepts a JSON or plain-text POST). Run in a nohup/tmux/
-# screen session, or use `herd monitor` which spawns it for you. With no
-# `webhook` set, falls back to a per-workspace ntfy.sh topic and prints the
-# subscribe URL on startup. The defaults below are a good starting point —
-# uncomment to customize. To use Slack/Discord instead, also set `webhook:`.
-# watch:
-#     format: ntfy                      # ntfy | slack | discord | raw
-#     interval_seconds: 30              # how often to poll SLURM
-#     events: [failed, done, heartbeat] # which events to deliver
-#     heartbeat_minutes: 1              # min gap between heartbeat digests
-#     summarize: true                   # opt-in: `claude -p` paragraph on failures
+# `herd monitor` runs an autonomous agent that operates the sweep and posts
+# updates to a Discord channel. Set the bot token in DISCORD_BOT_TOKEN and
+# put your server's guild ID below. See docs/discord-setup.md for one-time
+# bot creation. Without this block, the daemon still runs (failure triage,
+# resubmits, etc.) but has nowhere to post status messages.
+# discord:
+#     guild_id: "1234567890123456789"   # Right-click server → Copy Server ID
 
 parameters:
 {parameters_block}
