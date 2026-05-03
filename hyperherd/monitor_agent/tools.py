@@ -192,10 +192,12 @@ async def stop_all() -> Dict[str, Any]:
 
 @tool(
     "msg",
-    "Post a notification to the user. Routes through the configured chat "
-    "channel (Discord) if available, otherwise the legacy webhook. Voice "
-    "rule: prefix the body with 'Herd dog:' so the user can spot agent "
-    "messages.",
+    "Post a conversational message — replies to the user, alerts, "
+    "questions, or anything else that's part of the back-and-forth. "
+    "Recorded in chat history so future ticks remember it. For the "
+    "obligatory per-tick heartbeat summary, use `tick_summary` instead. "
+    "Voice rule: prefix the body with 'Herd dog:' so the user can spot "
+    "agent messages.",
     {"text": str},
 )
 async def msg(text: str) -> Dict[str, Any]:
@@ -206,6 +208,10 @@ async def msg(text: str) -> Dict[str, Any]:
         try:
             await channel.post(text)
             _audit("msg", text=text[:200], via=channel.name)
+            record_chat_entry(
+                Path(_CTX["workspace"]),
+                role="agent", text=text, via=channel.name, author="Herd dog",
+            )
             return {"posted": True, "via": channel.name}
         except Exception as e:
             _audit("msg_failed", error=str(e), via=channel.name)
@@ -229,7 +235,94 @@ async def msg(text: str) -> Dict[str, Any]:
         _audit("msg_failed", error=str(e))
         return {"posted": False, "error": str(e)}
     _audit("msg", text=text[:200], via="webhook")
+    record_chat_entry(
+        Path(_CTX["workspace"]),
+        role="agent", text=text, via="webhook", author="Herd dog",
+    )
     return {"posted": True, "via": "webhook", "webhook": webhook}
+
+
+@tool(
+    "tick_summary",
+    "Post the obligatory per-tick heartbeat summary. Same routing as "
+    "`msg`, but NOT recorded in chat history — heartbeats would otherwise "
+    "drown out actual conversation. Use this for the once-per-tick "
+    "'Herd dog: tick clean — ... Next tick in X' message and nothing else.",
+    {"text": str},
+)
+async def tick_summary(text: str) -> Dict[str, Any]:
+    channel = _CTX.get("channel")
+    if channel is not None:
+        try:
+            await channel.post(text)
+            _audit("tick_summary", text=text[:200], via=channel.name)
+            return {"posted": True, "via": channel.name}
+        except Exception as e:
+            _audit("tick_summary_failed", error=str(e), via=channel.name)
+            return {"posted": False, "error": str(e), "via": channel.name}
+
+    from hyperherd import watch
+    from hyperherd.config import load_config
+    config = load_config(str(_CTX["workspace"]))
+    webhook = config.watch.webhook
+    fmt = config.watch.format
+    if not webhook:
+        webhook, _ = watch.resolve_default_webhook(config.workspace, config.name)
+        fmt = "ntfy"
+
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(
+            None, lambda: watch.post_message(webhook, fmt, text, config.name)
+        )
+    except OSError as e:
+        _audit("tick_summary_failed", error=str(e))
+        return {"posted": False, "error": str(e)}
+    _audit("tick_summary", text=text[:200], via="webhook")
+    return {"posted": True, "via": "webhook", "webhook": webhook}
+
+
+# --- chat history ----------------------------------------------------------
+# Rolling buffer of recent messages on both sides so the agent can stitch
+# its own questions to the user's replies across ticks. Both sides write
+# here: this `msg` tool when the agent posts, and `state._drain_inbox`
+# when a user reply lands.
+
+CHAT_HISTORY_FILENAME = "chat-history.jsonl"
+CHAT_HISTORY_KEEP = 6  # last N entries total, mixed roles — "the last few"
+
+
+def record_chat_entry(
+    workspace: Path,
+    *,
+    role: str,        # "agent" | "user"
+    text: str,
+    via: str,         # "discord" | "webhook" | etc.
+    author: str = "",
+    timestamp: Optional[str] = None,
+) -> None:
+    """Append a chat entry to chat-history.jsonl, trimmed to last N."""
+    path = Path(workspace) / ".hyperherd" / CHAT_HISTORY_FILENAME
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing: list[str] = []
+        if path.is_file():
+            existing = [ln for ln in path.read_text().splitlines() if ln.strip()]
+        if timestamp is None:
+            from datetime import datetime, timezone
+            timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        line = json.dumps({
+            "timestamp": timestamp,
+            "role": role,
+            "author": author,
+            "via": via,
+            "text": text,
+        })
+        kept = (existing + [line])[-CHAT_HISTORY_KEEP:]
+        path.write_text("\n".join(kept) + "\n")
+    except OSError as e:
+        # Non-fatal — the post itself already succeeded.
+        _audit("record_chat_entry_failed", error=str(e))
 
 
 @tool(
@@ -373,7 +466,7 @@ ALL = [
     read_state, read_plan, write_plan,
     bump_mem, bump_time,
     run_indices, stop_index, stop_all,
-    msg, schedule_next, halt,
+    msg, tick_summary, schedule_next, halt,
 ]
 """All in-process tools, in the order they're registered with the SDK's
 `create_sdk_mcp_server(name='hyperherd', tools=ALL)`."""

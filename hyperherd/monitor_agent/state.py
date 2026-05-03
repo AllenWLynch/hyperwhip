@@ -23,6 +23,7 @@ SNAPSHOT_FILE = "last-snapshot.json"
 PREV_SNAPSHOT_FILE = "last-snapshot.prev.json"
 INBOX_FILE = "inbox.jsonl"
 PLAN_FILE = "MONITOR_PLAN.md"
+OUTBOUND_FILE = "last-outbound.jsonl"
 
 
 TickTrigger = Literal["scheduled", "failure", "completion", "user_message", "boot"]
@@ -47,6 +48,19 @@ class InboundMessage:
 
 
 @dataclass
+class ChatEntry:
+    """A recent message on either side of the conversation. Heartbeats
+    (the obligatory per-tick `tick_summary` posts) are deliberately not
+    recorded — only real conversation goes here so the agent can stitch
+    questions to replies across ticks without noise."""
+    timestamp: str
+    role: str             # "user" | "agent"
+    author: str           # Discord username for user; "Herd dog" for agent
+    via: str              # "discord" / "webhook" / etc.
+    text: str
+
+
+@dataclass
 class TickState:
     """The single document the agent reads at the start of every tick."""
     sweep_name: str
@@ -58,6 +72,7 @@ class TickState:
     newly_failed: List[FailureView]
     newly_completed: List[int]
     inbox: List[InboundMessage]
+    chat_history: List[ChatEntry]   # rolling buffer of recent real messages
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-serializable form — what `read_state()` hands the agent."""
@@ -71,6 +86,7 @@ class TickState:
             "newly_failed": [asdict(f) for f in self.newly_failed],
             "newly_completed": self.newly_completed,
             "inbox": [asdict(m) for m in self.inbox],
+            "chat_history": [asdict(m) for m in self.chat_history],
         }
 
 
@@ -163,12 +179,12 @@ def _read_plan(workspace: Path) -> str:
 
 
 def _drain_inbox(workspace: Path) -> List[InboundMessage]:
-    """Read inbox.jsonl, return parsed messages, then truncate the file.
+    """Read inbox.jsonl, return parsed messages, append each to the chat
+    history rolling buffer, then truncate the file.
 
     Truncating rather than deleting keeps the file's inode stable for any
-    process that's tailing it for debugging. Lines that fail to parse
-    are silently dropped — we'd rather lose one message than abort the
-    tick.
+    process that's tailing it for debugging. Lines that fail to parse are
+    silently dropped — we'd rather lose one message than abort the tick.
     """
     path = _hyperherd_dir(workspace) / INBOX_FILE
     if not path.is_file():
@@ -194,12 +210,59 @@ def _drain_inbox(workspace: Path) -> List[InboundMessage]:
         except (json.JSONDecodeError, KeyError):
             continue
 
+    # Mirror each inbound message into the chat history buffer so the
+    # agent has cross-tick context once the inbox is drained.
+    if msgs:
+        try:
+            from hyperherd.monitor_agent.tools import record_chat_entry
+            for m in msgs:
+                record_chat_entry(
+                    workspace,
+                    role="user", text=m.text, via=m.source,
+                    author=m.author, timestamp=m.timestamp,
+                )
+        except Exception:
+            pass
+
     # Truncate after a successful read.
     try:
         path.write_text("")
     except OSError:
         pass
     return msgs
+
+
+def _read_chat_history(workspace: Path) -> List[ChatEntry]:
+    """Read chat-history.jsonl. Returns user+agent entries in chronological
+    order. The file is maintained by `tools.record_chat_entry` and capped
+    to the last few entries; we just parse and return."""
+    from hyperherd.monitor_agent.tools import CHAT_HISTORY_FILENAME
+
+    path = _hyperherd_dir(workspace) / CHAT_HISTORY_FILENAME
+    if not path.is_file():
+        return []
+    try:
+        raw = path.read_text()
+    except OSError:
+        return []
+
+    out: List[ChatEntry] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            out.append(ChatEntry(
+                timestamp=d.get("timestamp", ""),
+                role=d.get("role", "?"),
+                author=d.get("author", ""),
+                via=d.get("via", "?"),
+                text=d.get("text", ""),
+            ))
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return out
 
 
 # --- public entrypoint ------------------------------------------------------
@@ -221,4 +284,5 @@ def compute(workspace: Path, trigger: TickTrigger = "scheduled") -> TickState:
         newly_failed=_diff_failed(prev, cur),
         newly_completed=_diff_completed(prev, cur),
         inbox=_drain_inbox(workspace),
+        chat_history=_read_chat_history(workspace),
     )

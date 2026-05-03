@@ -109,6 +109,7 @@ async def run_tick(
             "mcp__hyperherd__stop_index",
             "mcp__hyperherd__stop_all",
             "mcp__hyperherd__msg",
+            "mcp__hyperherd__tick_summary",
             "mcp__hyperherd__schedule_next",
             "mcp__hyperherd__halt",
         ],

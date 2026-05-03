@@ -52,12 +52,22 @@ def render_state(state: TickState) -> str:
         lines.append("")
 
     if state.inbox:
-        lines.append(f"**Inbox: {len(state.inbox)} message(s) from the user**")
+        lines.append(f"**Inbox: {len(state.inbox)} new message(s) from the user**")
         for m in state.inbox:
             text = m.text.strip().replace("\n", " ")
             if len(text) > 200:
                 text = text[:197] + "..."
             lines.append(f"  - [{m.timestamp}] {m.author}: {text}")
+        lines.append("")
+
+    if state.chat_history:
+        lines.append("Recent conversation (excludes per-tick heartbeats):")
+        for c in state.chat_history:
+            text = c.text.strip().replace("\n", " ")
+            if len(text) > 200:
+                text = text[:197] + "..."
+            who = c.author or c.role
+            lines.append(f"  - [{c.timestamp}] {c.role}/{who}: {text}")
         lines.append("")
 
     lines.append("---")
