@@ -157,6 +157,7 @@ class TestDaemonInboxWake(unittest.TestCase):
                 run_tick=fake_run_tick,
                 channel=channel,
                 post_final=False,
+                enable_slurm_poll=False,
             )
 
         out = asyncio.run(go())

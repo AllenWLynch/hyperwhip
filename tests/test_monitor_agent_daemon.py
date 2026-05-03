@@ -37,6 +37,8 @@ class TestDaemonLoop(unittest.TestCase):
 
     def _run(self, fake, **kwargs):
         kwargs.setdefault("post_final", False)
+        # Tests don't want a real SLURM poller subprocessing against tmp dirs.
+        kwargs.setdefault("enable_slurm_poll", False)
         return asyncio.run(
             daemon_mod.run_daemon(self.workspace, run_tick=fake, **kwargs)
         )
@@ -122,12 +124,77 @@ class TestDaemonLoop(unittest.TestCase):
             posted.return_value = asyncio.sleep(0)  # awaitable no-op
             asyncio.run(daemon_mod.run_daemon(
                 self.workspace, run_tick=fake, post_final=True,
+                enable_slurm_poll=False,
             ))
         posted.assert_called_once()
         kwargs = posted.call_args.kwargs
         self.assertTrue(kwargs["halted"])
         self.assertEqual(kwargs["halt_reason"], "sweep complete")
         self.assertEqual(kwargs["ticks"], 1)
+
+
+class TestDaemonSlurmEventWake(unittest.TestCase):
+    """Verify the queue-driven path: a SLURM event during the inter-tick
+    sleep should wake the daemon and run the next tick with the
+    appropriate trigger."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.workspace = Path(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_failure_event_wakes_with_failure_trigger(self):
+        from hyperherd.monitor_agent.event_source import WakeEvent
+
+        triggers = []
+        results = iter([
+            TickResult(next_delay_seconds=600, halted=False,
+                       halt_reason=None, cost_usd=0.01, turns=1),
+            TickResult(next_delay_seconds=None, halted=True,
+                       halt_reason="recurring exception",
+                       cost_usd=0.01, turns=1),
+        ])
+
+        # We poke the daemon's internal queue from the first tick. We
+        # need a way to access it from the fake; use a closure on a list
+        # that the run_daemon writes into via a hook.
+        injected_queue = {}
+
+        async def fake_run_tick(workspace, trigger, channel=None):
+            triggers.append(trigger)
+            if trigger == "boot":
+                # Find the daemon's event queue (only one in flight) and
+                # push a failure event during a short delay so the daemon
+                # is in its inter-tick sleep.
+                async def push_later():
+                    await asyncio.sleep(0.05)
+                    queue = injected_queue.get("q")
+                    if queue is not None:
+                        await queue.put(WakeEvent(trigger="failure"))
+                asyncio.create_task(push_later())
+            return next(results)
+
+        # Monkey-patch `asyncio.Queue.put_nowait` is overkill — instead,
+        # we wrap run_daemon's _wait_next_event to capture the queue
+        # arg. Simpler: peek at the asyncio.Queue created inside
+        # run_daemon by patching daemon_mod.asyncio.Queue.
+        original_queue_cls = daemon_mod.asyncio.Queue
+
+        def queue_factory(*args, **kwargs):
+            q = original_queue_cls(*args, **kwargs)
+            injected_queue["q"] = q
+            return q
+
+        with mock.patch.object(daemon_mod.asyncio, "Queue", queue_factory):
+            out = asyncio.run(daemon_mod.run_daemon(
+                self.workspace, run_tick=fake_run_tick,
+                enable_slurm_poll=False, post_final=False,
+            ))
+
+        self.assertEqual(triggers, ["boot", "failure"])
+        self.assertTrue(out.halted)
 
 
 if __name__ == "__main__":

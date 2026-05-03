@@ -1,20 +1,20 @@
-"""Daemon mode: schedule-driven loop on top of run_tick().
+"""Daemon mode: schedule + event-driven loop on top of run_tick().
 
-The agent picks the next-tick delay via its `schedule_next` tool; the
-daemon sleeps that long and runs another tick. SIGINT/SIGTERM trigger
+The agent picks the next-tick delay via `schedule_next`; the daemon
+sleeps that long, races the timer against any event the sources push
+into the wake queue, and runs another tick. SIGINT/SIGTERM trigger a
 clean exit at the next iteration boundary.
 
-If a `MessageChannel` is configured (Discord today), the daemon also:
+Event sources running alongside the loop:
 
-- Starts/stops it alongside the loop.
-- Routes inbound user messages into `.hyperherd/inbox.jsonl` and wakes
-  the loop early so the next tick fires with `trigger="user_message"`.
-- Routes the agent's outbound `msg` calls through the channel
-  (`tools.msg` reads it via `_CTX["channel"]`).
-- Posts the final-stop notification through the channel as well, so the
-  user gets it in the same place as everything else.
+- The `MessageChannel`'s inbox writer pushes `WakeEvent("user_message")`
+  when a user @-mentions the bot or replies to one of its posts.
+- `SlurmPoll` (Phase 3) pushes `WakeEvent("failure")` /
+  `WakeEvent("completion")` on trial-state transitions.
 
-Phase 3 will add the SLURM-event source to the same wake-up mechanism.
+Final-stop notification: when the loop exits (halt or signal), the
+daemon posts one "stopped" message through the channel (or webhook
+fallback) so the user sees the daemon is no longer running.
 """
 
 import asyncio
@@ -28,6 +28,8 @@ from hyperherd.monitor_agent import tick as tick_mod
 from hyperherd.monitor_agent.channel import (
     MessageChannel, build_channel, make_inbox_writer,
 )
+from hyperherd.monitor_agent.event_source import WakeEvent
+from hyperherd.monitor_agent.event_source.slurm import SlurmPoll
 
 log = logging.getLogger(__name__)
 
@@ -47,13 +49,15 @@ async def run_daemon(
     max_ticks: Optional[int] = None,
     run_tick=None,                # injectable for tests
     channel: Optional[MessageChannel] = None,  # if None, built from config
+    enable_slurm_poll: bool = True,
+    slurm_poll_interval: Optional[float] = None,
     post_final: bool = True,
 ) -> DaemonResult:
     """Run ticks in a loop until the agent halts or a signal arrives.
 
     First tick fires immediately with `trigger="boot"`. Subsequent ticks
-    wait for `result.next_delay_seconds`, interruptible by SIGINT/SIGTERM
-    or (when configured) an inbound user message.
+    wait for `result.next_delay_seconds` or until an event source pushes
+    a wake-up onto the queue.
     """
     workspace = Path(workspace).resolve()
     if run_tick is None:
@@ -65,14 +69,19 @@ async def run_daemon(
         channel = _build_channel_from_config(workspace)
 
     shutdown = asyncio.Event()
-    inbox_signal = asyncio.Event()
+    event_q: asyncio.Queue = asyncio.Queue()
 
     def _on_signal(signum):
         log.info("Received signal %s, shutting down after current tick.", signum)
         shutdown.set()
 
     def _on_inbox_write():
-        inbox_signal.set()
+        # Inbox writer fires after each user message lands; turn that into
+        # a queue event so the loop wakes early.
+        try:
+            event_q.put_nowait(WakeEvent(trigger="user_message"))
+        except asyncio.QueueFull:
+            pass
 
     loop = asyncio.get_running_loop()
     installed_handlers = []
@@ -83,7 +92,8 @@ async def run_daemon(
         except (NotImplementedError, RuntimeError):
             pass
 
-    # Wire inbound: events written to inbox.jsonl, then wake the loop.
+    # Wire inbound: events written to inbox.jsonl, then pushed onto the
+    # event queue.
     if channel is not None:
         writer = make_inbox_writer(workspace, on_write=_on_inbox_write)
         channel.set_inbound_handler(writer)
@@ -94,6 +104,19 @@ async def run_daemon(
             log.error("Failed to start channel '%s': %s — continuing without it.",
                       channel.name, e)
             channel = None
+
+    # Start the SLURM event source. It's purely additive — even if the
+    # poller fails, the daemon still runs scheduled ticks and reacts to
+    # user messages.
+    slurm_task: Optional[asyncio.Task] = None
+    if enable_slurm_poll:
+        kwargs = {}
+        if slurm_poll_interval is not None:
+            kwargs["interval_seconds"] = slurm_poll_interval
+        poller = SlurmPoll(workspace, **kwargs)
+        slurm_task = asyncio.create_task(
+            poller.run(event_q), name="slurm-poll",
+        )
 
     ticks = 0
     total_cost = 0.0
@@ -122,28 +145,34 @@ async def run_daemon(
                 log.info("Reached max-ticks cap (%d), exiting.", max_ticks)
                 break
 
+            # The tick's state.compute already absorbed every transition
+            # known up to now — drain the queue so we don't fire a
+            # redundant tick for events the agent has already seen.
+            _drain(event_q)
+
             delay = result.next_delay_seconds or 1800
             log.info("Sleeping up to %ds until next tick.", delay)
 
-            # Race three signals: timeout (normal scheduled tick), shutdown
-            # (signal received), inbox_signal (user message). Whichever
-            # fires first dictates the next iteration.
-            inbox_signal.clear()
-            woke_for = await _wait_first(
-                shutdown, inbox_signal, timeout=delay,
-            )
-            if woke_for == "shutdown":
+            outcome = await _wait_next_event(event_q, shutdown, timeout=delay)
+            if outcome == "shutdown":
                 break
-            elif woke_for == "inbox":
-                trigger = "user_message"
-            else:  # timeout
+            elif outcome == "timeout":
                 trigger = "scheduled"
+            else:
+                # outcome is the trigger string from a WakeEvent
+                trigger = outcome
 
     finally:
         for sig in installed_handlers:
             try:
                 loop.remove_signal_handler(sig)
             except (NotImplementedError, RuntimeError):
+                pass
+        if slurm_task is not None:
+            slurm_task.cancel()
+            try:
+                await slurm_task
+            except (asyncio.CancelledError, Exception):
                 pass
 
     stopped_by_signal = shutdown.is_set() and not halted
@@ -174,28 +203,42 @@ async def run_daemon(
     )
 
 
-async def _wait_first(
+# --- queue helpers --------------------------------------------------------
+
+def _drain(queue: asyncio.Queue) -> None:
+    """Empty the queue without blocking. The caller has just run a tick
+    that absorbed all known state, so any queued events are stale."""
+    while not queue.empty():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+
+
+async def _wait_next_event(
+    queue: asyncio.Queue,
     shutdown: asyncio.Event,
-    inbox: asyncio.Event,
     *,
     timeout: float,
 ) -> str:
-    """Block until shutdown, inbox, or timeout fires. Returns 'shutdown',
-    'inbox', or 'timeout'."""
+    """Block until shutdown, an event arrives, or timeout. Returns:
+    - 'shutdown' if shutdown fired
+    - 'timeout' if the timer elapsed
+    - the event's trigger string otherwise
+    """
     shutdown_task = asyncio.create_task(shutdown.wait(), name="wait-shutdown")
-    inbox_task = asyncio.create_task(inbox.wait(), name="wait-inbox")
+    queue_task = asyncio.create_task(queue.get(), name="wait-event")
     try:
         done, pending = await asyncio.wait(
-            {shutdown_task, inbox_task},
+            {shutdown_task, queue_task},
             timeout=timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
-        for t in (shutdown_task, inbox_task):
+        for t in (shutdown_task, queue_task):
             if not t.done():
                 t.cancel()
-        # Allow cancellations to propagate so we don't leak warnings.
-        for t in (shutdown_task, inbox_task):
+        for t in (shutdown_task, queue_task):
             try:
                 await t
             except (asyncio.CancelledError, Exception):
@@ -203,8 +246,9 @@ async def _wait_first(
 
     if shutdown_task in done:
         return "shutdown"
-    if inbox_task in done:
-        return "inbox"
+    if queue_task in done:
+        event = queue_task.result()
+        return event.trigger
     return "timeout"
 
 
@@ -214,7 +258,7 @@ def _build_channel_from_config(workspace: Path) -> Optional[MessageChannel]:
     try:
         from hyperherd.config import load_config
         config = load_config(str(workspace))
-        return build_channel(config, sweep_name=config.name)
+        return build_channel(config, sweep_name=config.name, workspace=workspace)
     except Exception as e:
         log.warning("Could not build channel from config: %s", e)
         return None
