@@ -209,13 +209,21 @@ class DiscordChannel(MessageChannel):
         bot_user = self._client.user
         raw = message.content or ""
 
+        # Try every name we can think of: the bot's global username and
+        # any per-guild nickname. Either may be what the user typed.
+        candidate_names = [bot_user.name]
+        if self._channel is not None:
+            try:
+                me_in_guild = self._channel.guild.me
+                if me_in_guild and me_in_guild.display_name:
+                    candidate_names.append(me_in_guild.display_name)
+            except Exception:
+                pass
+
         # Three ways to address the bot, in priority order:
         #   1. Real Discord mention (autocomplete-resolved <@USERID>).
         #   2. A reply to one of the bot's messages.
-        #   3. Plain-text "@<botname>" / "<botname>:" / "<botname>," prefix —
-        #      a fallback for users who type the name manually instead of
-        #      picking it from the autocomplete dropdown. Without this,
-        #      "@HerdDog please pause" would silently drop on the floor.
+        #   3. Plain-text "@<botname>" / "<botname>:" / "<botname>," prefix.
         is_mention = bot_user in message.mentions
         is_reply_to_bot = (
             message.reference is not None
@@ -223,12 +231,38 @@ class DiscordChannel(MessageChannel):
             and getattr(message.reference.resolved.author, "id", None)
                 == bot_user.id
         )
-        text_after_prefix = _strip_name_prefix(raw, bot_user.name)
+        text_after_prefix = None
+        for name in candidate_names:
+            text_after_prefix = _strip_name_prefix(raw, name)
+            if text_after_prefix is not None:
+                break
         is_text_address = text_after_prefix is not None
 
         if not (is_mention or is_reply_to_bot or is_text_address):
-            # Plain channel chatter — ignored on purpose.
+            # Diagnostic: if a message arrives with empty content from a
+            # human, that's almost always the MESSAGE CONTENT INTENT not
+            # being enabled in the Developer Portal — Discord ships an
+            # empty content for non-resolved-mention messages without it.
+            if not raw and not is_mention:
+                log.warning(
+                    "Got a message with empty content from %s — likely "
+                    "MESSAGE CONTENT INTENT is disabled in the Discord "
+                    "Developer Portal. Enable it under Bot → Privileged "
+                    "Gateway Intents and restart the daemon.",
+                    message.author,
+                )
+            else:
+                log.debug(
+                    "Ignoring channel message from %s: not addressing the "
+                    "bot. Names tried: %s. Raw content head: %r",
+                    message.author, candidate_names, raw[:80],
+                )
             return
+
+        log.info(
+            "Inbound from %s (mention=%s reply=%s text_prefix=%s)",
+            message.author, is_mention, is_reply_to_bot, is_text_address,
+        )
 
         if self._on_inbound is None:
             return
@@ -239,9 +273,11 @@ class DiscordChannel(MessageChannel):
             cleaned = strip_mention(raw, bot_user.id)
             # Real mentions can also coexist with text-prefix forms; strip
             # both so we never forward "@HerdDog HerdDog: please pause".
-            stripped_again = _strip_name_prefix(cleaned, bot_user.name)
-            if stripped_again is not None:
-                cleaned = stripped_again
+            for name in candidate_names:
+                stripped_again = _strip_name_prefix(cleaned, name)
+                if stripped_again is not None:
+                    cleaned = stripped_again
+                    break
 
         if not cleaned.strip():
             return
