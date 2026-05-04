@@ -39,3 +39,7 @@ hyperherd/_version.py
 
 # Personal release-process notes
 PYPI.md
+
+# uv lockfiles — not tracked
+uv.lock
+**/uv.lock
