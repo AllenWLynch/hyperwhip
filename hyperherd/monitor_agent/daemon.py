@@ -69,8 +69,12 @@ def _build_heartbeat_text(workspace: Path, runtime_stats: dict) -> Optional[str]
         return None
 
     totals = snap.get("totals") or {}
+    # Order presented to the user. `pruned` is distinct from `failed`
+    # (algorithmic kill vs SLURM error) and `cancelled` (user kill);
+    # surfacing all three keeps the running+terminal sum visibly equal
+    # to the trial total.
     order = ["ready", "submitted", "queued", "running",
-             "completed", "failed", "cancelled"]
+             "completed", "failed", "pruned", "cancelled"]
     parts = [f"{totals[k]} {k}" for k in order if totals.get(k)]
     digest = ", ".join(parts) or "no trials yet"
     ticks = runtime_stats.get("ticks", 0)

@@ -215,6 +215,8 @@ Totals — 4 running, 5 completed, 1 failed. Next tick in 5 min.
 
 End with `Next tick in <human duration>`. Pull the duration from the same value you pass to `schedule_next`.
 
+**Don't roll `pruned` into `failed`.** They're distinct categories: `failed` is a SLURM/code error (the trial would be resubmitted on a `herd run`), `pruned` is your algorithmic kill (a sticky terminal decision, not retried). When trials of both kinds exist, list them separately: `4 running, 5 completed, 1 failed, 2 pruned`. Same goes for `cancelled` (user-driven). Only include the categories that have non-zero counts — don't list `0 pruned` for sweeps where you haven't pruned anything.
+
 Cadence table (pass to `schedule_next`):
 
 | Situation | seconds |

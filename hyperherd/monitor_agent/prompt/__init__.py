@@ -28,7 +28,7 @@ def render_state(state: TickState) -> str:
     totals = state.totals or {}
     if totals:
         order = ["ready", "submitted", "queued", "running",
-                 "completed", "failed", "cancelled"]
+                 "completed", "failed", "pruned", "cancelled"]
         parts = [f"{totals.get(k, 0)} {k}" for k in order if totals.get(k)]
         parts.append(f"{totals.get('total', len(state.trials))} total")
         lines.append("Totals: " + ", ".join(parts))

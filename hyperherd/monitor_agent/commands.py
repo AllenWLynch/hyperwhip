@@ -48,7 +48,7 @@ def _format_status(snap: dict) -> str:
     trials = snap.get("trials") or []
 
     order = ["ready", "submitted", "queued", "running",
-             "completed", "failed", "cancelled"]
+             "completed", "failed", "pruned", "cancelled"]
     counts = ", ".join(
         f"{totals[k]} {k}" for k in order if totals.get(k)
     ) or "(no trials yet)"
