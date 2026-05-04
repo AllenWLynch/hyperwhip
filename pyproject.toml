@@ -16,6 +16,9 @@ docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.5",
 ]
+lightning = [
+    "lightning>=2.0",
+]
 monitor = [
     # The agent SDK + Discord client require Python ≥ 3.10. We gate the
     # whole [monitor] extras group on that marker so older Python envs

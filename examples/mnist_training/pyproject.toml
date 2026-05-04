@@ -1,0 +1,19 @@
+[project]
+name = "hyperherd-mnist-example"
+version = "0"
+description = "HyperHerd MNIST sweep example — Lightning + Hydra trainer."
+requires-python = ">=3.10"
+dependencies = [
+    "hydra-core>=1.3",
+    "lightning>=2.0",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    # The Lightning integration in train.py imports from
+    # hyperherd.integrations.lightning. Resolved via [tool.uv.sources] below.
+    "hyperherd",
+]
+
+# Pin hyperherd to the in-repo source so changes to the integration are
+# picked up without a publish/reinstall cycle.
+[tool.uv.sources]
+hyperherd = { path = "../..", editable = true }

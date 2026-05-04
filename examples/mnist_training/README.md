@@ -15,10 +15,17 @@ A complete example training an MNIST digit classifier using PyTorch Lightning, H
 
 ## Prerequisites
 
+This example is a self-contained `uv` project — `pyproject.toml` pins all
+trial-side deps and points `hyperherd` at the in-repo source so edits to
+the integration are picked up immediately.
+
 ```bash
-pip install pytorch-lightning torchvision hydra-core
-pip install -e /path/to/hyperherd  # for log_result support
+cd examples/mnist_training
+uv sync
 ```
+
+`launch.sh` invokes the trainer with `uv run python train.py …`, which
+resolves against this directory's `pyproject.toml` automatically.
 
 ## Hyperparameters
 
