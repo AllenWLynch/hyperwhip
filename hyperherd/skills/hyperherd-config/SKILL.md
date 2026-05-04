@@ -6,8 +6,8 @@ description: Author or edit a HyperHerd sweep configuration (hyperherd.yaml) and
 
 HyperHerd runs SLURM hyperparameter sweeps from two files in a workspace directory:
 
-- `hyperherd.yaml` — declarative sweep config (parameters, grid mode, SLURM resources, conditions, static Hydra overrides)
-- `launch.sh` — bash script that receives a Hydra override string as `$1` and runs the training command
+- `hyperherd.yaml` — declarative sweep config (parameters, grid mode, SLURM resources, conditions, static overrides, optional Discord channel for the autonomous monitor)
+- `launch.sh` — bash script that receives a `name=value` override string as `$1` and runs the training command. The string format is whatever the launcher chooses to do with it — Hydra trainers consume it natively; non-Hydra trainers can `parse_overrides()` it (see `from hyperherd import parse_overrides`).
 
 The full reference lives at `docs/configuration.md` in this repo. **Read it before writing a non-trivial config** — this skill is a checklist and a set of patterns, not a substitute for the doc.
 
@@ -33,8 +33,9 @@ The full reference lives at `docs/configuration.md` in this repo. **Read it befo
 3. **Conditions** (formerly `constraints`, both keys still parse):
    - Need to filter out illegal combinations? Use `exclude`
    - Need to pin a parameter when another is set? Use `force`
-   - Need to inject **non-parameter** Hydra overrides (e.g. `scheduler.warmup_steps`)? Use `set`
+   - Need to inject **non-parameter** overrides (e.g. `scheduler.warmup_steps`)? Use `set`
 4. **Launcher:** does it need a container, conda env, or modules? Most launchers are 5–10 lines.
+5. **Autonomous monitor** (optional but recommended for sweeps > a few minutes): set `discord.guild_id` so `herd monitor` has a channel to post in. See "Discord block" below.
 
 ## `when` matchers (the flexible part)
 
@@ -74,9 +75,9 @@ Rejected at config-load time: any other function call, attribute access, subscri
 
 `set.<key>.expr` is evaluated **after** `force:`, so the expression sees forced values, not pre-force ones.
 
-## Hydra `+key` / `~key` overrides
+## Hydra-flavored `+key` / `~key` overrides
 
-To inject a Hydra override that *adds* a new key (`+experiment=foo`) or *removes* one (`~foo`), put the prefix directly in the parameter name:
+For Hydra trainers, you sometimes need to *add* a new key (`+experiment=foo`) or *delete* one (`~foo`). Put the prefix directly in the parameter name:
 
 ```yaml
 parameters:
@@ -110,9 +111,50 @@ static_overrides:
     - "trainer.seed=42"
 ```
 
-These are **not** swept and **not** validated against the parameter list — they're free-form Hydra paths, same as `set` keys. Use this for fixed paths, seeds, dataset roots, logger config, etc. that differ from your Hydra defaults but don't change across the sweep.
+These are **not** swept and **not** validated against the parameter list — they're free-form `name=value` tokens passed verbatim to the launcher (which forwards them as-is to the trainer). Hydra trainers consume them as overrides; non-Hydra trainers can `parse_overrides()` them. Use this for fixed paths, seeds, dataset roots, logger config, etc. that differ from your trainer's defaults but don't change across the sweep.
 
 If the value should depend on a swept parameter, use a condition with `set:` instead.
+
+## Discord block (autonomous monitor)
+
+`herd monitor` operates the sweep through a per-sweep Discord channel — the agent posts status, the user replies via mention or slash commands. To enable it, add a `discord:` block with a server ID. The bot token comes from the `DISCORD_BOT_TOKEN` env var (don't put secrets in YAML), set up once per server per `docs/discord-setup.md`.
+
+```yaml
+discord:
+  guild_id: "1234567890123456789"
+```
+
+Optional fields:
+
+- `channel_id`: pin to a specific existing channel (skips auto-create)
+- `channel_name`: override the sweep-derived channel name
+- `dashboard_refresh_seconds`: how often the live-dashboard message updates (default 60, set 0 to disable)
+
+If `discord.guild_id` is set but `DISCORD_BOT_TOKEN` is unset, `herd monitor` refuses to start with an error pointing at the missing env var. Don't paper this over by removing the discord block "just to make it run" — the user explicitly opted in.
+
+## External MCP servers (vendor logger integrations)
+
+If the user wants the autonomous monitor to talk to wandb, mlflow, ClickUp, or any other MCP-capable service, add an `mcp_servers:` list. Each entry is the SDK's external-MCP shape; tools appear to the agent as `mcp__<name>__*`.
+
+```yaml
+mcp_servers:
+  - name: wandb
+    command: uvx
+    args:
+      - --from
+      - git+https://github.com/wandb/wandb-mcp-server
+      - wandb-mcp-server
+    env:
+      WANDB_API_KEY: ${WANDB_API_KEY}
+```
+
+`${VAR}` references are expanded from the daemon's environment at startup. See `docs/mcp-integrations.md`. Most users don't need this — the agent's built-in `compute_metric` tool aggregates `log_result` streams from disk and covers ~95% of monitoring queries. Only add an MCP if the user explicitly asks for vendor-tool access.
+
+## Streaming `log_result` for the monitor
+
+If the user wants `herd monitor` to be able to prune diverging trials early, the trainer needs to call `log_result(name, value, step=N)` periodically (in addition to the bare `log_result(name, value)` for final summary metrics). The monitor's `compute_metric` tool reads these streams. See `docs/results.md` for framework-specific patterns (Lightning callback, HuggingFace TrainerCallback, plain PyTorch loop).
+
+This is independent of the YAML — the YAML doesn't need a config knob for it. Just mention it when the user asks about pruning or early-stopping.
 
 ## Environment variables in the launcher
 
@@ -230,8 +272,8 @@ conditions:
     force:
       weight_decay: 0.01
 
-  # Inject non-parameter Hydra overrides (the `set` field).
-  # Keys are arbitrary Hydra paths; not validated as parameters.
+  # Inject non-parameter overrides (the `set` field).
+  # Keys are arbitrary name=value tokens; not validated as parameters.
   - name: adamw_warmup
     when:
       optimizer: adamw
@@ -303,7 +345,9 @@ herd run <workspace>              # actually submit
 
 ## Authoring discipline
 
-- Don't invent fields. The full set is in `docs/configuration.md`. If the user asks for something outside the supported expr language (function calls, attribute access, etc.), say so and suggest restructuring with `if/else` or a structured matcher.
+- Don't invent fields. The full set is in `docs/configuration.md`. Top-level fields today are: `name`, `grid`, `launcher`, `slurm`, `parameters`, `conditions`, `static_overrides`, `discord` (autonomous monitor), `mcp_servers` (external MCP integrations). Anything else is wrong.
 - Don't recommend `constraints:` for new configs — `conditions:` is the canonical key (the legacy alias is for backward compat only).
+- Don't recommend a `watch:` block. It used to exist for the legacy webhook-poster (`herd watch`), which has been removed. The monitor's chat surface is now the `discord:` block.
+- Don't recommend a top-level `hydra:` block. There used to be one (a wrapper around `static_overrides`), now it's just `static_overrides`. The legacy alias still parses but it's not the canonical form.
 - Pick `abbrev` values that read well in filenames: `lr`, `opt`, `wd`, `bs`, `nl`, `do` (dropout), `sd` (seed), etc.
 - When the user asks for a sweep, default to **partial grid** if they name 2–3 swept params and the rest are fixed; default to **full grid** only if they explicitly want a Cartesian product.
