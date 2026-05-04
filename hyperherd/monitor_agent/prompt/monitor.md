@@ -30,7 +30,7 @@ The full per-tick state document is **already in this user message** — totals,
 - `stop_index(index)` / `stop_all()` → cancel running trials (user-driven; status becomes `cancelled`, will be resubmitted on the next `herd run`).
 - `prune_index(index, reason)` → algorithmic kill (NaN/inf or sustained-divergence). Status becomes `pruned`, distinct from `cancelled` — `herd run` will NOT resubmit pruned trials. Reason is recorded; use this for any metric-based decision to terminate a trial early.
 - `validate_config(index)` → Hydra-only preflight. Runs `herd test --cfg-job` (loads the trainer, prints resolved config, exits) so config errors crash here instead of after waiting in the SLURM queue. Returns `{valid, returncode, stdout_tail, stderr_tail}`. Use as a canary preflight when the user said yes to the Hydra interview question.
-- `tail_log(index, lines)` → last N lines of a trial's stderr (default 40). Pattern-match for training evidence (loss values, step/iteration/epoch counters) when verifying a canary, or for stack traces when triaging a failure.
+- `tail_log(index, lines, stream)` → last N lines of a trial's logs. `stream` is `"both"` (default — labeled .out + .err sections, the right choice for canary verification since frameworks split training output across both inconsistently), `"stderr"`, or `"stdout"`. Pattern-match for training evidence (loss values, step/iteration/epoch counters) or stack traces.
 - `compute_metric(index, metric, *, last_n=, step_min=, step_max=, since_seconds=)` → aggregate a logged metric stream. Each metric is its own file. Returns `{n, n_total, last, mean, median, stddev, min, max, has_nan_or_inf, recent[], step_first, step_last}`. Optional windowing args narrow the result (last N points / step interval / last N seconds). Cheap — use freely instead of fetching raw history.
 - `tick_summary(text)` → the obligatory once-per-tick heartbeat. **NOT** recorded in chat history.
 - `msg(text)` → real conversation: replies, alerts, questions. **Recorded** in chat history.
@@ -126,7 +126,7 @@ Each tick advances at most one phase, then ends.
 For each canary trial, advance only when **at least one** of the following is true:
 
 1. **`compute_metric(idx, <success_metric>)` returns `n > 0`.** The trial has called `log_result(name, val, step=...)` at least once — definitive proof of training.
-2. **`tail_log(idx, 40)` shows training indicators.** Look for any of: numeric loss values (`loss=0.42` / `train_loss: 0.42`), step / iteration / epoch counters (`step 100`, `epoch 1/50`, `iter:1000`), framework "trainer started" messages (`Lightning Trainer`, `Starting epoch`, `Trainer.fit`), batch progress (`100/938`).
+2. **`tail_log(idx, 40)` shows training indicators.** Defaults to reading both stdout and stderr — many trainers print progress to stdout (Lightning progress bars, `print()` calls, Hydra INFO logs) and only emit stderr on errors. Look in either section for any of: numeric loss values (`loss=0.42` / `train_loss: 0.42`), step / iteration / epoch counters (`step 100`, `epoch 1/50`, `iter:1000`), framework "trainer started" messages (`Lightning Trainer`, `Starting epoch`, `Trainer.fit`), batch progress (`100/938`).
 
 If neither is true:
 

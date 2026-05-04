@@ -240,27 +240,52 @@ def _format_duration(seconds: int) -> str:
 
 # --- /tail ----------------------------------------------------------------
 
-def cmd_tail(workspace: Path, index: int, lines: int = 20) -> str:
-    """Last N lines of trial <index>'s stderr log. Stdout is excluded —
-    the action is almost always in stderr (Python tracebacks, SLURM
-    notices, training prints from libs that write to stderr by default)."""
+def cmd_tail(
+    workspace: Path,
+    index: int,
+    lines: int = 20,
+    stream: str = "both",
+) -> str:
+    """Last N lines of trial <index>'s logs. `stream` selects which
+    file(s) to read: "stderr", "stdout", or "both" (default — labeled
+    sections, useful when frameworks split training prints between the
+    two streams)."""
     if lines <= 0 or lines > 1000:
         return f"`lines` must be between 1 and 1000 (got {lines})."
+    if stream not in ("stderr", "stdout", "both"):
+        return f"`stream` must be 'stderr', 'stdout', or 'both' (got {stream!r})."
 
-    log_path = Path(workspace) / ".hyperherd" / "logs" / f"{index}.err"
-    if not log_path.is_file():
-        return f"No stderr log at `{log_path}` — trial {index} may not have started yet."
+    logs_dir = Path(workspace) / ".hyperherd" / "logs"
+    targets = []
+    if stream in ("stderr", "both"):
+        targets.append(("stderr", logs_dir / f"{index}.err"))
+    if stream in ("stdout", "both"):
+        targets.append(("stdout", logs_dir / f"{index}.out"))
 
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except OSError as e:
-        return f"Couldn't read `{log_path}`: {e}"
+    sections = []
+    any_present = False
+    for label, path in targets:
+        if not path.is_file():
+            sections.append(f"=== {label} === (no file at `{path}`)")
+            continue
+        any_present = True
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError as e:
+            sections.append(f"=== {label} === (couldn't read: {e})")
+            continue
+        tail = "\n".join(content.splitlines()[-lines:])
+        if not tail.strip():
+            sections.append(f"=== {label} === (empty)")
+        else:
+            sections.append(f"=== {label} (last {lines} lines) ===\n{tail}")
 
-    tail = "\n".join(content.splitlines()[-lines:])
-    if not tail.strip():
-        return f"Trial {index} stderr is empty (log file exists but has no content yet)."
-    return f"`{log_path.name}` — last {lines} lines:\n{tail}"
+    if not any_present:
+        return (
+            f"No log files for trial {index} — it may not have started yet."
+        )
+    return "\n\n".join(sections)
 
 
 # --- /stats ---------------------------------------------------------------

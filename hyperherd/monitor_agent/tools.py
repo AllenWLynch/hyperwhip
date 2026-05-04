@@ -301,19 +301,24 @@ async def validate_config(args: Dict[str, Any]) -> Dict[str, Any]:
 
 @tool(
     "tail_log",
-    "Read the last N lines of a trial's stderr log "
-    "(`.hyperherd/logs/<index>.err`). Returns plain text — pattern-match "
-    "for training evidence (loss values, step/iteration/epoch counters, "
-    "framework startup messages) when verifying a canary, or for stack "
-    "traces when triaging a failure. Default lines=40, max 1000.",
-    {"index": int, "lines": int},
+    "Read the last N lines of a trial's logs from disk. `stream` "
+    "selects which file(s): 'both' (default — reads .out and .err with "
+    "labeled sections; the right choice when verifying a canary because "
+    "frameworks split training output between stdout and stderr "
+    "inconsistently), 'stderr' (just .err — Python tracebacks, SLURM "
+    "notices), or 'stdout' (just .out — print() output, framework "
+    "progress bars). Default lines=40, max 1000. Returns plain text — "
+    "pattern-match for training evidence (loss values, step/iteration/"
+    "epoch counters, framework startup messages) or for stack traces.",
+    {"index": int, "lines": int, "stream": str},
 )
 async def tail_log(args: Dict[str, Any]) -> Dict[str, Any]:
     from hyperherd.monitor_agent import commands as _cmd
     index = int(args["index"])
     lines = int(args.get("lines") or 40)
-    text = _cmd.cmd_tail(Path(_CTX["workspace"]), index, lines)
-    _audit("tail_log", index=index, lines=lines)
+    stream = str(args.get("stream") or "both")
+    text = _cmd.cmd_tail(Path(_CTX["workspace"]), index, lines, stream=stream)
+    _audit("tail_log", index=index, lines=lines, stream=stream)
     return _text_response(text)
 
 

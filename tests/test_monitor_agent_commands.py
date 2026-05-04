@@ -84,25 +84,51 @@ class TestTail(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
-    def test_returns_last_n_lines(self):
+    def test_returns_last_n_lines_from_stderr(self):
         log = self.workspace / ".hyperherd" / "logs" / "5.err"
         log.write_text("\n".join(f"line-{i}" for i in range(50)))
 
-        out = cmd_mod.cmd_tail(self.workspace, index=5, lines=10)
-        self.assertIn("5.err", out)
+        out = cmd_mod.cmd_tail(self.workspace, index=5, lines=10,
+                               stream="stderr")
+        self.assertIn("stderr", out)
         self.assertIn("line-49", out)
         self.assertIn("line-40", out)
         self.assertNotIn("line-39", out)
 
+    def test_default_reads_both_streams(self):
+        (self.workspace / ".hyperherd" / "logs" / "3.out").write_text(
+            "stdout-line-A\nstdout-line-B\n"
+        )
+        (self.workspace / ".hyperherd" / "logs" / "3.err").write_text(
+            "stderr-line-X\nstderr-line-Y\n"
+        )
+        out = cmd_mod.cmd_tail(self.workspace, index=3, lines=5)
+        self.assertIn("stdout", out)
+        self.assertIn("stderr", out)
+        self.assertIn("stdout-line-B", out)
+        self.assertIn("stderr-line-Y", out)
+
+    def test_stream_stdout_only(self):
+        (self.workspace / ".hyperherd" / "logs" / "3.out").write_text("OUT")
+        (self.workspace / ".hyperherd" / "logs" / "3.err").write_text("ERR")
+        out = cmd_mod.cmd_tail(self.workspace, index=3, lines=5,
+                               stream="stdout")
+        self.assertIn("OUT", out)
+        self.assertNotIn("ERR", out)
+
     def test_missing_log_returns_friendly_msg(self):
         out = cmd_mod.cmd_tail(self.workspace, index=99, lines=20)
-        self.assertIn("No stderr log", out)
+        # When neither file exists, the helper says so.
         self.assertIn("99", out)
+        self.assertTrue(
+            "No log files" in out or "no file" in out,
+            f"unexpected output: {out!r}",
+        )
 
     def test_empty_log_says_so(self):
-        log = self.workspace / ".hyperherd" / "logs" / "7.err"
-        log.write_text("")
-        out = cmd_mod.cmd_tail(self.workspace, index=7, lines=20)
+        (self.workspace / ".hyperherd" / "logs" / "7.err").write_text("")
+        out = cmd_mod.cmd_tail(self.workspace, index=7, lines=20,
+                               stream="stderr")
         self.assertIn("empty", out)
 
     def test_validates_lines_bounds(self):
@@ -110,6 +136,11 @@ class TestTail(unittest.TestCase):
         self.assertIn("must be between", out)
         out = cmd_mod.cmd_tail(self.workspace, index=0, lines=10000)
         self.assertIn("must be between", out)
+
+    def test_validates_stream_value(self):
+        out = cmd_mod.cmd_tail(self.workspace, index=0, lines=10,
+                               stream="bogus")
+        self.assertIn("must be", out)
 
 
 class TestStats(unittest.TestCase):
