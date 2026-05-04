@@ -5,6 +5,15 @@
 !!! tip "Want to skip ahead?"
     The repo ships [a complete MNIST sweep](example.md) you can clone and run as-is. PyTorch Lightning + Hydra trainer, 11 trials, all four condition forms in use. Two minutes from `git clone` to trials on the queue.
 
+!!! example "Have Claude Code set you up"
+    Open Claude Code in your project directory and paste the block below — Claude will walk you through install, config authoring, validation, and (if you want it) the autonomous monitor end-to-end. Full guide at [Set up with Claude Code](setup-help.md).
+
+    ```
+    Help me set up HyperHerd. Read the setup guide at
+    https://raw.githubusercontent.com/AllenWLynch/hyperherd/main/docs/setup-help.md
+    and follow it — start with the Phase 0 interview, then drive the rest.
+    ```
+
 ## What you write
 
 Two files in a workspace directory:

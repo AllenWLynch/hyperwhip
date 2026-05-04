@@ -66,6 +66,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Set up with Claude Code: setup-help.md
   - Try the MNIST example: example.md
   - Autonomous monitor:
       - Overview: monitor.md

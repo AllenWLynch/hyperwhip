@@ -40,6 +40,18 @@ pip install 'hyperherd[monitor]'
 herd monitor my_experiment
 ```
 
+## Have Claude Code set you up
+
+Open Claude Code in your project directory and paste this — it'll walk you through install, config authoring, validation, and (if you want it) the autonomous monitor end-to-end:
+
+```
+Help me set up HyperHerd. Read the setup guide at
+https://raw.githubusercontent.com/AllenWLynch/hyperherd/main/docs/setup-help.md
+and follow it — start with the Phase 0 interview, then drive the rest.
+```
+
+The full guide is also browsable at [allenwlynch.github.io/hyperherd/setup-help](https://allenwlynch.github.io/hyperherd/setup-help/).
+
 ## Documentation
 
 - [Getting started](https://allenwlynch.github.io/hyperherd/getting-started/) — install, scaffold, run your first sweep
