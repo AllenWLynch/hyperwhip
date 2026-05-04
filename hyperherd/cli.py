@@ -502,7 +502,13 @@ def cmd_test(args):
 
     env = os.environ.copy()
     env["HYPERHERD_WORKSPACE"] = config.workspace
+    env["HYPERHERD_SWEEP_NAME"] = config.name
     env["HYPERHERD_TRIAL_ID"] = str(index)
+    env["HYPERHERD_TRIAL_NAME"] = exp_name
+    # Legacy alias — `experiment` here means "this trial's identifier",
+    # which is confusing with the broader use of "experiment" for the
+    # whole sweep. Kept for backward compat with trainer code that
+    # reads it. New code should use HYPERHERD_TRIAL_NAME.
     env["HYPERHERD_EXPERIMENT_NAME"] = exp_name
 
     result = subprocess.run(
@@ -926,7 +932,11 @@ def cmd_monitor(args):
     from hyperherd.monitor_agent import daemon as daemon_mod
     try:
         outcome = asyncio.run(
-            daemon_mod.run_daemon(workspace, max_ticks=args.max_ticks)
+            daemon_mod.run_daemon(
+                workspace,
+                max_ticks=args.max_ticks,
+                agent_enabled=not args.no_agent,
+            )
         )
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -1311,6 +1321,15 @@ def main():
     p_monitor.add_argument(
         "--max-ticks", type=int, default=None,
         help="Stop the daemon after N ticks (safety cap for testing)",
+    )
+    p_monitor.add_argument(
+        "--no-agent", action="store_true",
+        help=(
+            "Passive mode: keep the chat channel + dashboard + event posts "
+            "alive but skip the agent loop entirely (no model calls, no "
+            "token spend). Useful for very long sweeps where the daemon's "
+            "transport surface is enough."
+        ),
     )
 
     # snapshot — bundled JSON for agent loops (status + stats + failed stderr)

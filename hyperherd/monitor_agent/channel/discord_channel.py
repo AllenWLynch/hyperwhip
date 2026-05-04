@@ -264,15 +264,54 @@ class DiscordChannel(MessageChannel):
             except Exception as e:
                 log.debug("Couldn't unpin %s: %s", getattr(msg, "id", "?"), e)
 
+    def _build_dashboard_view(self):
+        """A discord.ui.View carrying the Refresh button. timeout=None
+        keeps it clickable for the daemon's whole lifetime (the view's
+        in-memory state lives on this DiscordChannel instance, so the
+        button stops working if the daemon restarts — the next dashboard
+        post will install a fresh one)."""
+        import discord
+
+        class _DashboardView(discord.ui.View):
+            def __init__(self_v, channel: "DiscordChannel") -> None:
+                super().__init__(timeout=None)
+                self_v._channel = channel
+
+            @discord.ui.button(
+                label="Refresh",
+                emoji="🔄",
+                style=discord.ButtonStyle.secondary,
+                custom_id="hyperherd_dashboard_refresh",
+            )
+            async def refresh(  # noqa: ARG002 — discord.py signature
+                self_v,
+                interaction: "discord.Interaction",
+                button: "discord.ui.Button",
+            ) -> None:
+                try:
+                    content = self_v._channel._build_dashboard_content()
+                except Exception as e:
+                    await interaction.response.send_message(
+                        f"⚠️ Refresh failed: {type(e).__name__}: {e}",
+                        ephemeral=True,
+                    )
+                    return
+                await interaction.response.edit_message(
+                    content=content, view=self_v
+                )
+
+        return _DashboardView(self)
+
     async def _dashboard_loop(self) -> None:
         """Maintain a single self-editing 'live status' message in the
         channel so users don't have to keep typing `/status`. Best-effort
         on every front: a single failure to edit / pin / build never
         kills the loop, since the rest of the daemon is more important."""
         # Initial post + best-effort pin.
+        view = self._build_dashboard_view()
         try:
             self._dashboard_msg = await self._channel.send(
-                "📊 _loading dashboard…_"
+                "📊 _loading dashboard…_", view=view,
             )
         except Exception as e:
             log.warning("Could not post initial dashboard: %s", e)
@@ -300,7 +339,7 @@ class DiscordChannel(MessageChannel):
                 log.warning("Dashboard content build failed: %s", e)
                 continue
             try:
-                await self._dashboard_msg.edit(content=content)
+                await self._dashboard_msg.edit(content=content, view=view)
             except Exception as e:
                 # Could be NotFound (user deleted the message) or any
                 # other transient glitch. Try to recreate; if THAT
@@ -308,7 +347,10 @@ class DiscordChannel(MessageChannel):
                 log.info("Dashboard edit failed (%s); reposting.",
                          type(e).__name__)
                 try:
-                    self._dashboard_msg = await self._channel.send(content)
+                    view = self._build_dashboard_view()
+                    self._dashboard_msg = await self._channel.send(
+                        content, view=view,
+                    )
                     try:
                         await self._dashboard_msg.pin(
                             reason="HyperHerd live dashboard"
@@ -359,10 +401,18 @@ class DiscordChannel(MessageChannel):
         now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
         order = ["ready", "submitted", "queued", "running",
                  "completed", "failed", "pruned", "cancelled"]
+        # Colored-circle scheme for at-a-glance scanning in Discord's
+        # pinned panel — single-codepoint emojis (no variation selectors)
+        # render consistently across web/desktop/mobile clients.
         emoji = {
-            "ready": "○", "submitted": "📤", "queued": "⏳",
-            "running": "▶️", "completed": "✅", "failed": "⚠️",
-            "pruned": "✂️", "cancelled": "🛑",
+            "ready": "⚪", "submitted": "🔵", "queued": "🟡",
+            "running": "🟢", "completed": "✅", "failed": "🔴",
+            "pruned": "🟣", "cancelled": "⚫",
+        }
+        health_emoji = {
+            "running": "🟢", "degraded": "🟡",
+            "halted": "🔴", "stopping": "⚫",
+            "passive": "⚪",
         }
         total = totals.get("total", len(trials))
 
@@ -377,9 +427,33 @@ class DiscordChannel(MessageChannel):
 
         lines.append("")
         lines.append("**Daemon**")
+        health = info_kwargs.get("health", "running")
+        consec = info_kwargs.get("consecutive_failures", 0)
+        health_label = health
+        if health == "degraded" and consec:
+            health_label = f"degraded ({consec} fail)"
+        lines.append(f"{health_emoji.get(health, '·')} `{health_label}`")
         lines.append(f"phase · `{phase}`")
-        lines.append(f"ticks · {ticks}")
-        lines.append(f"cost · ${cost:.4f}")
+        # In passive mode the agent never runs, so ticks/cost are always 0.
+        # Hide them to avoid implying the daemon is doing more than it is.
+        is_passive = (health == "passive")
+        if not is_passive:
+            lines.append(f"ticks · {ticks}")
+            lines.append(f"cost · ${cost:.4f}")
+        next_tick_iso = info_kwargs.get("next_tick_at_iso")
+        if next_tick_iso:
+            try:
+                nt = datetime.fromisoformat(next_tick_iso)
+                if nt.tzinfo is None:
+                    nt = nt.replace(tzinfo=timezone.utc)
+                remaining = int((nt - datetime.now(timezone.utc)).total_seconds())
+                label = "next snapshot" if is_passive else "next tick"
+                if remaining > 0:
+                    lines.append(f"{label} · in {_format_uptime(remaining)}")
+                else:
+                    lines.append(f"{label} · _waking_")
+            except Exception:
+                pass
         if started_iso:
             try:
                 started_dt = datetime.fromisoformat(started_iso)

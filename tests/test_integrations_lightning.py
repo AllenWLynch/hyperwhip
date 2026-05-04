@@ -121,6 +121,7 @@ class TestHyperHerdLoggerEnabled(unittest.TestCase):
         shutil.rmtree(self.tmp)
         os.environ.pop("HYPERHERD_WORKSPACE", None)
         os.environ.pop("HYPERHERD_TRIAL_ID", None)
+        os.environ.pop("HYPERHERD_TRIAL_NAME", None)
         os.environ.pop("HYPERHERD_EXPERIMENT_NAME", None)
 
     def test_log_metrics_writes_streams(self):
@@ -185,13 +186,28 @@ class TestHyperHerdLoggerEnabled(unittest.TestCase):
         self.assertAlmostEqual(summary["final_val_acc"], 0.9)
         self.assertEqual(summary["status"], "success")
 
-    def test_version_uses_experiment_name_when_set(self):
-        os.environ["HYPERHERD_EXPERIMENT_NAME"] = "lr-0.001_opt-adam"
+    def test_version_uses_trial_name_when_set(self):
+        os.environ["HYPERHERD_TRIAL_NAME"] = "lr-0.001_opt-adam"
         log = HyperHerdLogger()
         self.assertEqual(log.version, "lr-0.001_opt-adam")
 
+    def test_version_uses_legacy_experiment_name(self):
+        # Backward compat: trainers reading the old env var still work.
+        os.environ.pop("HYPERHERD_TRIAL_NAME", None)
+        os.environ["HYPERHERD_EXPERIMENT_NAME"] = "lr-0.01_opt-sgd"
+        log = HyperHerdLogger()
+        self.assertEqual(log.version, "lr-0.01_opt-sgd")
+
+    def test_version_prefers_trial_name_over_legacy(self):
+        # If both are set (slurm.py sets both), TRIAL_NAME wins.
+        os.environ["HYPERHERD_TRIAL_NAME"] = "new-style"
+        os.environ["HYPERHERD_EXPERIMENT_NAME"] = "old-style"
+        log = HyperHerdLogger()
+        self.assertEqual(log.version, "new-style")
+
     def test_version_falls_back_to_trial_id(self):
-        # No HYPERHERD_EXPERIMENT_NAME — falls through to trial_id.
+        # No name vars set — falls through to trial_id.
+        os.environ.pop("HYPERHERD_TRIAL_NAME", None)
         os.environ.pop("HYPERHERD_EXPERIMENT_NAME", None)
         log = HyperHerdLogger()
         self.assertEqual(log.version, "5")

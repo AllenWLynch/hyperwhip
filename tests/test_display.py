@@ -12,7 +12,7 @@ class TestCondenseCaseBlock(unittest.TestCase):
         arms = []
         for i in range(n_trials):
             arms.append(f"  {i})")
-            arms.append(f"    HYPERHERD_EXPERIMENT_NAME=trial-{i}")
+            arms.append(f"    HYPERHERD_TRIAL_NAME=trial-{i}")
             arms.append(f"    OVERRIDES='lr={0.1 ** i}'")
             arms.append("    ;;")
         return "\n".join(
@@ -41,10 +41,10 @@ class TestCondenseCaseBlock(unittest.TestCase):
         out = _condense_case_block(script)
         # First arm preserved.
         self.assertIn("  0)\n", out)
-        self.assertIn("HYPERHERD_EXPERIMENT_NAME=trial-0", out)
+        self.assertIn("HYPERHERD_TRIAL_NAME=trial-0", out)
         # Middle arms gone.
-        self.assertNotIn("HYPERHERD_EXPERIMENT_NAME=trial-10", out)
-        self.assertNotIn("HYPERHERD_EXPERIMENT_NAME=trial-19", out)
+        self.assertNotIn("HYPERHERD_TRIAL_NAME=trial-10", out)
+        self.assertNotIn("HYPERHERD_TRIAL_NAME=trial-19", out)
         # Wildcard arm preserved (so the user sees the safety net).
         self.assertIn("  *)", out)
         self.assertIn("exit 1", out)

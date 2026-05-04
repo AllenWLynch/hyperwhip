@@ -98,6 +98,13 @@ def _hyperherd_dir(workspace: Path) -> Path:
     return workspace / ".hyperherd"
 
 
+def refresh_snapshot(workspace: Path) -> Dict[str, Any]:
+    """Public helper — refresh `.hyperherd/last-snapshot.json` without
+    running an agent tick. Used by passive monitor mode (no agent loop)
+    so the dashboard / heartbeat keep showing fresh totals."""
+    return _rotate_and_capture(Path(workspace).resolve())
+
+
 def _rotate_and_capture(workspace: Path) -> Dict[str, Any]:
     """Move the previous snapshot to .prev, fetch a fresh one, write it.
 

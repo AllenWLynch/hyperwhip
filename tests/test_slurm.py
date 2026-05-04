@@ -161,9 +161,23 @@ class TestBakedLookup(_SbatchTestCase):
     def test_case_block_sets_expected_vars(self):
         f = self._fixture()
         script = generate_sbatch_script(f.cfg, [0])
+        self.assertIn("HYPERHERD_TRIAL_NAME=", script)
+        # Legacy alias must still be set so existing trainer code keeps working.
         self.assertIn("HYPERHERD_EXPERIMENT_NAME=", script)
         self.assertIn("OVERRIDES=", script)
-        self.assertIn("export HYPERHERD_EXPERIMENT_NAME", script)
+        self.assertIn("export HYPERHERD_TRIAL_NAME HYPERHERD_EXPERIMENT_NAME", script)
+
+    def test_sweep_name_exported_at_top(self):
+        f = self._fixture()
+        script = generate_sbatch_script(f.cfg, [0])
+        # SWEEP_NAME is shared across all trials, so it goes at the top of
+        # the script (alongside WORKSPACE/TRIAL_ID), not in the case block.
+        self.assertIn(f"export HYPERHERD_SWEEP_NAME={f.cfg.name}", script)
+        # And it must appear *before* the per-trial case block.
+        self.assertLess(
+            script.index("HYPERHERD_SWEEP_NAME"),
+            script.index('case "$SLURM_ARRAY_TASK_ID"'),
+        )
 
     def test_unknown_array_id_exits_nonzero(self):
         # The wildcard arm must fail loudly so a misconfigured array doesn't

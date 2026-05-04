@@ -48,19 +48,20 @@ For reference, HyperHerd generates a batch script roughly like this:
 
 # Export HyperHerd environment variables
 export HYPERHERD_WORKSPACE="<workspace>"
+export HYPERHERD_SWEEP_NAME="resnet_sweep"
 export HYPERHERD_TRIAL_ID="$SLURM_ARRAY_TASK_ID"
-export HYPERHERD_EXPERIMENT_NAME=$(python -m hyperherd resolve-name "<workspace>/.hyperherd/manifest.json" "$SLURM_ARRAY_TASK_ID")
 
-# Resolve overrides for this array task (includes experiment_name=...)
-OVERRIDES=$(python -m hyperherd resolve-overrides "<workspace>/.hyperherd/manifest.json" "$SLURM_ARRAY_TASK_ID" --static "data.root=/scratch/imagenet trainer.max_epochs=90")
+# Per-trial values (HYPERHERD_TRIAL_NAME + OVERRIDES) are baked into the
+# generated script via a `case "$SLURM_ARRAY_TASK_ID" in ... esac` block.
+HYPERHERD_TRIAL_NAME="lr-0.001_opt-adam_bs-64"  # set per-task
+export HYPERHERD_TRIAL_NAME
+OVERRIDES="experiment_name=$HYPERHERD_TRIAL_NAME learning_rate=0.001 optimizer=adam batch_size=64 data.root=/scratch/imagenet trainer.max_epochs=90"
 
 # Invoke the user's launcher script
 bash "<workspace>/launch.sh" "$OVERRIDES"
 ```
 
-The `resolve-overrides` and `resolve-name` subcommands are internal HyperHerd utilities — they read `manifest.json` and print the override string or experiment name for a given array task ID. This means `python` and the `hyperherd` package must be available on the compute node (outside the container).
-
-If `python` isn't on your bare compute nodes, see the [`jq` fallback in the launcher docs](launcher.md#compute-nodes-without-python).
+The actual generated script bakes the per-trial values directly into a `case` statement at submission time, so neither `python` nor the `hyperherd` package needs to be available on the compute node — only `bash`.
 
 ## Re-running and reconciliation
 

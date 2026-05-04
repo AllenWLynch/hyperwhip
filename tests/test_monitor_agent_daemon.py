@@ -110,6 +110,51 @@ class TestDaemonLoop(unittest.TestCase):
         self.assertEqual(out.ticks, 1)
         self.assertFalse(out.halted)
 
+    def test_passive_mode_skips_agent_and_refreshes_snapshot(self):
+        """With agent_enabled=False the daemon never invokes run_tick but
+        does refresh last-snapshot.json so the dashboard stays current."""
+        calls = []
+
+        async def fake_run_tick(workspace, trigger, **_):
+            calls.append(trigger)
+            raise AssertionError(
+                "run_tick was called in passive mode — agent must be skipped"
+            )
+
+        snap_calls = []
+        from hyperherd.monitor_agent import state as state_mod
+
+        def fake_refresh(ws):
+            snap_calls.append(ws)
+            return {"trials": [], "totals": {}}
+
+        async def _drive():
+            # Bound the test by cancelling the daemon task ourselves
+            # after a short window — passive mode has no natural exit.
+            task = asyncio.create_task(daemon_mod.run_daemon(
+                self.workspace,
+                run_tick=fake_run_tick,
+                enable_slurm_poll=False,
+                post_final=False,
+                agent_enabled=False,
+                passive_refresh_seconds=0,  # tight loop for the test
+            ))
+            await asyncio.sleep(0.1)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with mock.patch.object(state_mod, "refresh_snapshot", fake_refresh):
+            asyncio.run(_drive())
+
+        self.assertEqual(calls, [], "run_tick must not be called in passive mode")
+        self.assertGreaterEqual(
+            len(snap_calls), 1,
+            "passive mode should refresh the snapshot at least once",
+        )
+
     def test_final_message_fires_on_halt(self):
         """The daemon must post a 'stopped' notification on exit so the user
         always knows when API calls have ceased."""

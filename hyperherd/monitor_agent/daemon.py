@@ -109,12 +109,22 @@ async def run_daemon(
     slurm_poll_interval: Optional[float] = None,
     heartbeat_seconds: int = 300,
     post_final: bool = True,
+    agent_enabled: bool = True,
+    passive_refresh_seconds: int = 60,
 ) -> DaemonResult:
     """Run ticks in a loop until the agent halts or a signal arrives.
 
     First tick fires immediately with `trigger="boot"`. Subsequent ticks
     wait for `result.next_delay_seconds` or until an event source pushes
     a wake-up onto the queue.
+
+    With ``agent_enabled=False`` the agent loop is skipped entirely — no
+    model calls, no token spend. The daemon still runs the SLURM poll,
+    heartbeat, and Discord channel (so slash commands keep working) and
+    refreshes ``last-snapshot.json`` every ``passive_refresh_seconds``
+    so the live dashboard stays current. Use this for very long sweeps
+    where you want the chat surface but don't want the agent burning
+    tokens at every tick.
     """
     workspace = Path(workspace).resolve()
     if run_tick is None:
@@ -136,10 +146,20 @@ async def run_daemon(
         "ticks": 0,
         "total_cost_usd": 0.0,
         "started_at_iso": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # Health is one of: "running" (green), "degraded" (yellow — at least
+        # one consecutive tick failure but under the halt threshold),
+        # "halted" (red), "stopping" (a /stop or signal is mid-shutdown),
+        # "passive" (white — agent loop disabled, daemon just keeps the
+        # chat surface and dashboard alive without spending tokens).
+        # The dashboard reads this to render a one-char status emoji.
+        "health": "passive" if not agent_enabled else "running",
+        "consecutive_failures": 0,
+        "agent_enabled": agent_enabled,
     }
 
     def _on_signal(signum):
         log.info("Received signal %s, shutting down after current tick.", signum)
+        runtime_stats["health"] = "stopping"
         shutdown.set()
 
     def _on_inbox_write():
@@ -165,7 +185,10 @@ async def run_daemon(
         writer = make_inbox_writer(workspace, on_write=_on_inbox_write)
         channel.set_inbound_handler(writer)
         # Let /stop trigger the same shutdown path SIGINT/SIGTERM use.
-        channel.set_stop_handler(lambda: shutdown.set())
+        def _stop_via_channel():
+            runtime_stats["health"] = "stopping"
+            shutdown.set()
+        channel.set_stop_handler(_stop_via_channel)
         # /info pulls live runtime stats via this callback.
         channel.set_info_handler(lambda: dict(runtime_stats))
         try:
@@ -210,7 +233,49 @@ async def run_daemon(
     MAX_CONSECUTIVE_FAILURES = 5
     FAILURE_COOLDOWN_SECONDS = 60
 
+    if not agent_enabled:
+        log.info(
+            "Passive mode: agent loop disabled. Refreshing snapshot every %ds.",
+            passive_refresh_seconds,
+        )
+        if channel is not None:
+            try:
+                await channel.post(
+                    "⚪ Monitor running in **passive mode** — slash commands, "
+                    "dashboard, and event posts are live, but the agent loop "
+                    "is disabled (no token spend). Restart without `--no-agent` "
+                    "to re-enable autonomous monitoring."
+                )
+            except Exception as e:
+                log.warning("Could not post passive-mode banner: %s", e)
+
     try:
+        # ── Passive mode ────────────────────────────────────────────────
+        # Skip the agent entirely. Periodically refresh last-snapshot.json
+        # so the dashboard / heartbeat / SlurmPoll baselines have current
+        # data; the channel keeps slash commands working on its own.
+        while not shutdown.is_set() and not agent_enabled:
+            try:
+                from hyperherd.monitor_agent import state as _state
+                _state.refresh_snapshot(workspace)
+            except Exception as e:
+                log.warning("Passive snapshot refresh failed: %s", e)
+
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            runtime_stats["next_tick_at_iso"] = (
+                _dt.now(_tz.utc) + _td(seconds=passive_refresh_seconds)
+            ).isoformat(timespec="seconds")
+            try:
+                await asyncio.wait_for(
+                    shutdown.wait(), timeout=passive_refresh_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass
+            runtime_stats.pop("next_tick_at_iso", None)
+            # Drain non-agent wake events so the queue doesn't grow
+            # unbounded (in passive mode nothing consumes them).
+            _drain(event_q)
+
         while not shutdown.is_set():
             log.info("Tick %d starting (trigger=%s)", ticks + 1, trigger)
             # Show the platform's "thinking" indicator (Discord typing dots,
@@ -225,6 +290,8 @@ async def run_daemon(
                         workspace, trigger=trigger, channel=channel,
                     )
                 consecutive_failures = 0
+                runtime_stats["consecutive_failures"] = 0
+                runtime_stats["health"] = "running"
             except Exception as e:
                 # Tick blew up (SDK error, max_turns exceeded, network blip,
                 # etc.). Don't kill the daemon — log, alert the user,
@@ -232,6 +299,8 @@ async def run_daemon(
                 # consecutive failures, since that suggests a real problem
                 # we can't recover from automatically.
                 consecutive_failures += 1
+                runtime_stats["consecutive_failures"] = consecutive_failures
+                runtime_stats["health"] = "degraded"
                 log.exception(
                     "Tick %d raised (consecutive failures: %d): %s",
                     ticks + 1, consecutive_failures, e,
@@ -252,6 +321,7 @@ async def run_daemon(
                         f"halting after {MAX_CONSECUTIVE_FAILURES} "
                         f"consecutive tick failures — check daemon log"
                     )
+                    runtime_stats["health"] = "halted"
                     break
                 # Cooldown — but interruptible by shutdown signal.
                 try:
@@ -304,7 +374,12 @@ async def run_daemon(
             delay = result.next_delay_seconds or 1800
             log.info("Sleeping up to %ds until next tick.", delay)
 
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            runtime_stats["next_tick_at_iso"] = (
+                _dt.now(_tz.utc) + _td(seconds=delay)
+            ).isoformat(timespec="seconds")
             outcome = await _wait_next_event(event_q, shutdown, timeout=delay)
+            runtime_stats.pop("next_tick_at_iso", None)
             if outcome == "shutdown":
                 break
             elif outcome == "timeout":

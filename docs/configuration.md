@@ -117,11 +117,12 @@ experiment_name=lr-0.001_opt-adam_bs-64 learning_rate=0.001 optimizer=adam batch
 
 If you're using Hydra this passes through unmodified. If not, your `launch.sh` parses these `name=value` pairs into whatever flags your trainer accepts.
 
-Three environment variables are also exported in the SLURM script:
+Four environment variables are also exported in the SLURM script:
 
 - `HYPERHERD_WORKSPACE` — absolute path to the workspace directory
+- `HYPERHERD_SWEEP_NAME` — the sweep's `name:` from yaml (shared across all trials)
 - `HYPERHERD_TRIAL_ID` — the array task index (same as `$SLURM_ARRAY_TASK_ID`)
-- `HYPERHERD_EXPERIMENT_NAME` — the experiment name (e.g. `lr-0.001_opt-adam_bs-64`)
+- `HYPERHERD_TRIAL_NAME` — the auto-generated per-trial identifier (e.g. `lr-0.001_opt-adam_bs-64`)
 
 Use these for output directories, wandb run names, logging paths, and the [`log_result()` API](results.md).
 

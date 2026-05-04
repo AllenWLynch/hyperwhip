@@ -158,25 +158,26 @@ This is independent of the YAML — the YAML doesn't need a config knob for it. 
 
 ## Environment variables in the launcher
 
-HyperHerd exports three environment variables before invoking `launch.sh`. Use them inside the launcher (or pass them through to the training script) to give every trial a stable identity.
+HyperHerd exports four environment variables before invoking `launch.sh`. Use them inside the launcher (or pass them through to the training script) to give every trial a stable identity.
 
 | Variable | Value | Typical use |
 |----------|-------|-------------|
 | `HYPERHERD_WORKSPACE` | absolute path to the workspace directory | resolving paths under `.hyperherd/`, locating the manifest |
+| `HYPERHERD_SWEEP_NAME` | the sweep's `name:` from yaml (shared across trials) | wandb project name, parent output directory |
 | `HYPERHERD_TRIAL_ID` | the SLURM array task index (same as `$SLURM_ARRAY_TASK_ID`) | per-trial output subdir, `log_result()` keying |
-| `HYPERHERD_EXPERIMENT_NAME` | the auto-generated name (e.g. `lr-0.001_opt-adam_bs-64`) | wandb run name, output directory, checkpoint path |
+| `HYPERHERD_TRIAL_NAME` | the auto-generated per-trial identifier (e.g. `lr-0.001_opt-adam_bs-64`) | wandb run name, output directory, checkpoint path |
 
 The training code can read these directly:
 
 ```python
 import os
-exp_name = os.environ["HYPERHERD_EXPERIMENT_NAME"]
-output_dir = f"./outputs/{exp_name}"          # idempotent, stable across resubmissions
+trial_name = os.environ["HYPERHERD_TRIAL_NAME"]
+output_dir = f"./outputs/{trial_name}"        # idempotent, stable across resubmissions
 ```
 
 Or pass them through Hydra by referencing them in `static_overrides` (Hydra resolves `${env:VAR}` if you have OmegaConf env-var resolution enabled), but reading them directly in Python is usually simpler.
 
-**Idempotency reminder:** because `herd run` resubmits failed/cancelled trials with the same array indices and parameters, your training script must use a *deterministic* output path (driven by `HYPERHERD_EXPERIMENT_NAME` or `HYPERHERD_TRIAL_ID`) and resume from checkpoint on startup.
+**Idempotency reminder:** because `herd run` resubmits failed/cancelled trials with the same array indices and parameters, your training script must use a *deterministic* output path (driven by `HYPERHERD_TRIAL_NAME` or `HYPERHERD_TRIAL_ID`) and resume from checkpoint on startup.
 
 ## Common patterns
 
@@ -317,7 +318,7 @@ python train.py $OVERRIDES
 - **Discrete `default` not in `values`** is rejected at parse time.
 - **`exclude` / `force` referencing an unknown parameter** is rejected at parse time. (`set` keys are *not* validated — they're free-form Hydra paths.)
 - **Trial dedup on params only** — if a `force` collapses two combos to the same params, they merge. Extras (`set`) are deterministic from params, so they don't break this.
-- **Idempotent training is required** for `herd run` resubmission to work. Use `$HYPERHERD_EXPERIMENT_NAME` for a stable output dir and resume from checkpoint on startup.
+- **Idempotent training is required** for `herd run` resubmission to work. Use `$HYPERHERD_TRIAL_NAME` for a stable output dir and resume from checkpoint on startup.
 - **Launcher path** in `hyperherd.yaml` is resolved relative to the config file's directory, not the cwd.
 
 ## Throttling concurrent jobs

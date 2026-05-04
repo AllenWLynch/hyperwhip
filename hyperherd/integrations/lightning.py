@@ -85,6 +85,9 @@ class HyperHerdLogger(Logger):
         self._name = name
         self._version = (
             version
+            or os.environ.get("HYPERHERD_TRIAL_NAME")
+            # HYPERHERD_EXPERIMENT_NAME is the legacy alias for TRIAL_NAME
+            # — slurm.py still exports it so existing trainer code keeps working.
             or os.environ.get("HYPERHERD_EXPERIMENT_NAME")
             or os.environ.get("HYPERHERD_TRIAL_ID")
             or "local"

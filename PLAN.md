@@ -230,7 +230,7 @@ The agent's `allowed_tools` includes `mcp__wandb__query_wandb_tool` and `mcp__wa
 
 **Wandb run identification.** The skill needs to know how to map a HyperHerd trial index to a wandb run. Two options:
 
-1. **Trainer responsibility.** User's trainer initializes wandb with `name=os.environ["HYPERHERD_EXPERIMENT_NAME"]`. The agent searches wandb for runs named matching the experiment_name.
+1. **Trainer responsibility.** User's trainer initializes wandb with `name=os.environ["HYPERHERD_TRIAL_NAME"]`. The agent searches wandb for runs named matching the trial name.
 2. **Trainer reports run ID.** User's trainer calls `hyperherd.log_result("wandb_run_id", wandb.run.id)`. The agent reads the per-trial `metrics["wandb_run_id"]` from snapshot and queries that run directly.
 
 Option 2 is more reliable. Document both; recommend (2) in the skill.

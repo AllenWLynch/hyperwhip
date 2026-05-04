@@ -9,8 +9,9 @@ The launcher script is a user-provided bash script. HyperHerd does **not** manag
 3. Your script invokes the training command, passing those overrides through to whatever CLI your trainer exposes. [Hydra](https://hydra.cc/) is the recommended trainer harness because it consumes this format natively (`python train.py $OVERRIDES`), but you're free to parse the string however you want — split on spaces, transform into `--key value` flags, write a YAML overlay, whatever fits.
 4. SLURM environment variables (`$SLURM_JOB_ID`, `$SLURM_ARRAY_TASK_ID`, …) are available, plus:
     - `$HYPERHERD_WORKSPACE` — absolute path to the workspace
+    - `$HYPERHERD_SWEEP_NAME` — the sweep's `name:` from yaml (shared across all trials)
     - `$HYPERHERD_TRIAL_ID` — array task index
-    - `$HYPERHERD_EXPERIMENT_NAME` — auto-generated experiment name
+    - `$HYPERHERD_TRIAL_NAME` — auto-generated per-trial identifier
 5. Exit code 0 means success; nonzero means failure.
 
 !!! note "Hydra-specific flag"
@@ -185,14 +186,14 @@ If your launcher works on the login node but fails inside SLURM with import erro
 
 `herd run` is idempotent — rerunning it resubmits only `ready`/`failed`/`cancelled` trials. For this to be useful, **your training script must also be idempotent**:
 
-- **Checkpoint on a deterministic path.** Use `$HYPERHERD_EXPERIMENT_NAME` or `$HYPERHERD_TRIAL_ID` to construct a unique, stable output directory.
+- **Checkpoint on a deterministic path.** Use `$HYPERHERD_TRIAL_NAME` or `$HYPERHERD_TRIAL_ID` to construct a unique, stable output directory.
 - **Resume from checkpoint.** On startup, check if a checkpoint exists and resume.
 - **Don't fail on existing output.** Handle pre-existing output directories gracefully.
 
 ```python
 import os
-exp_name = os.environ.get("HYPERHERD_EXPERIMENT_NAME", "default")
-output_dir = f"./outputs/{exp_name}"
+trial_name = os.environ.get("HYPERHERD_TRIAL_NAME", "default")
+output_dir = f"./outputs/{trial_name}"
 ```
 
 ## Compute nodes without Python
@@ -210,11 +211,12 @@ OVERRIDES=$(jq -r --argjson id "$TASK_ID" '
   .[] | select(.index == $id) | .params | to_entries | map("\(.key)=\(.value)") | join(" ")
 ' "$MANIFEST")
 
-EXPERIMENT_NAME=$(jq -r --argjson id "$TASK_ID" '
+TRIAL_NAME=$(jq -r --argjson id "$TASK_ID" '
   .[] | select(.index == $id) | .experiment_name
 ' "$MANIFEST")
+export HYPERHERD_TRIAL_NAME="$TRIAL_NAME"
 
-OVERRIDES="experiment_name=$EXPERIMENT_NAME $OVERRIDES data.root=/scratch/imagenet"
+OVERRIDES="experiment_name=$TRIAL_NAME $OVERRIDES data.root=/scratch/imagenet"
 
 CONTAINER="/shared/containers/pytorch-24.01.sif"
 apptainer exec --nv --bind "/scratch:/scratch" "$CONTAINER" \

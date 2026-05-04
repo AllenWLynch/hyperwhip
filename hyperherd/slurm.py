@@ -75,6 +75,7 @@ def generate_sbatch_script(
         "",
         "# Export HyperHerd environment variables",
         f"export HYPERHERD_WORKSPACE={shlex.quote(config.workspace)}",
+        f"export HYPERHERD_SWEEP_NAME={shlex.quote(config.name)}",
         'export HYPERHERD_TRIAL_ID="$SLURM_ARRAY_TASK_ID"',
         "",
         "# Per-trial lookup baked at submission time (no Python required here).",
@@ -90,8 +91,9 @@ def generate_sbatch_script(
 def _build_lookup_case(
     workspace: str, indices: List[int], static_overrides: Optional[List[str]]
 ) -> str:
-    """Render a bash `case` statement that sets HYPERHERD_EXPERIMENT_NAME and
-    OVERRIDES for each pending array index.
+    """Render a bash `case` statement that sets HYPERHERD_TRIAL_NAME (and
+    its legacy alias HYPERHERD_EXPERIMENT_NAME) plus OVERRIDES for each
+    pending array index.
 
     Resolves both at submission time using the manifest. Values are
     single-quoted for the shell so awkward `static_overrides` (paths with
@@ -112,6 +114,9 @@ def _build_lookup_case(
         exp_name = trial.get("experiment_name", "")
         overrides = manifest.resolve_overrides(workspace, idx, static_overrides)
         parts.append(f"  {idx})")
+        parts.append(f"    HYPERHERD_TRIAL_NAME={shlex.quote(exp_name)}")
+        # Legacy alias — pre-dated the SWEEP_NAME / TRIAL_NAME split.
+        # Kept so existing trainer code that reads it keeps working.
         parts.append(f"    HYPERHERD_EXPERIMENT_NAME={shlex.quote(exp_name)}")
         parts.append(f"    OVERRIDES={shlex.quote(overrides)}")
         parts.append("    ;;")
@@ -124,7 +129,7 @@ def _build_lookup_case(
     parts.append("    exit 1")
     parts.append("    ;;")
     parts.append("esac")
-    parts.append("export HYPERHERD_EXPERIMENT_NAME")
+    parts.append("export HYPERHERD_TRIAL_NAME HYPERHERD_EXPERIMENT_NAME")
     return "\n".join(parts)
 
 
