@@ -14,17 +14,19 @@ The config showcases all four condition forms — programmatic predicate, litera
 ## Run it
 
 ```bash
+# Install HyperHerd from PyPI:
+pip install hyperherd
+
+# Clone the repo to get the example workspace (the example files
+# aren't shipped in the wheel — only the CLI is):
 git clone https://github.com/AllenWLynch/hyperherd.git
 cd hyperherd
-
-# Install HyperHerd itself (the CLI):
-pip install .
 
 # Install the trial-side training deps (PyTorch + Lightning + Hydra):
 pip install -r examples/mnist_training/requirements.txt
 
 # Edit examples/mnist_training/hyperherd.yaml: change `slurm.partition`
-# to one your cluster has. Defaults assume `short,park`.
+# to one your cluster has. Defaults to `short`.
 
 # Preview the sweep — no SLURM submission, just shows the trial table:
 herd run examples/mnist_training/ --dry-run

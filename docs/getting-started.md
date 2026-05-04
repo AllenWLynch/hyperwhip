@@ -13,15 +13,6 @@ pip install hyperherd
 pip install 'hyperherd[monitor]'
 ```
 
-For development against an unreleased commit, install from the repo:
-
-```bash
-pip install git+https://github.com/AllenWLynch/hyperherd.git
-# Or, for a local clone:
-git clone https://github.com/AllenWLynch/hyperherd.git
-cd hyperherd && pip install -e .
-```
-
 ### Install the Claude Code skill
 
 HyperHerd ships with a [Claude Code skill](claude-skill.md) for authoring sweep configs. After `pip install`, run:
