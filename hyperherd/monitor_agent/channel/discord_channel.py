@@ -193,6 +193,12 @@ class DiscordChannel(MessageChannel):
         # to rate-limit the Refresh button so a user spamming it can't
         # turn into a sacct-pounding loop.
         self._last_manual_refresh: float = 0.0
+        # Per-trial Discord Thread objects, populated lazily on the
+        # first failure post for that trial. Cleared on daemon
+        # restart — recovering threads from message history is
+        # possible but the agent's first thread post will just
+        # synthesize a new parent message.
+        self._threads_by_trial: dict = {}
         self._on_inbound: Optional[InboundHandler] = None
         self._on_stop: Optional[StopHandler] = None
         self._on_info: Optional[InfoHandler] = None
@@ -349,6 +355,93 @@ class DiscordChannel(MessageChannel):
         except Exception as e:
             log.warning("Failed to post to Discord: %s", e)
 
+    async def post_file(
+        self, path: Path, *, body: Optional[str] = None,
+    ) -> None:
+        """Upload a file to the channel. `body` is the optional
+        accompanying message text (Discord renders it above the file)."""
+        if self._channel is None:
+            log.warning(
+                "post_file() called before channel is ready; dropping %s",
+                path,
+            )
+            return
+        try:
+            import discord
+        except ImportError:  # pragma: no cover
+            return
+        try:
+            f = discord.File(str(path))
+            await self._channel.send(content=body, file=f)
+        except Exception as e:
+            log.warning("Failed to upload %s to Discord: %s", path, e)
+
+    async def post_to_trial_thread(
+        self,
+        trial_index: int,
+        body: Optional[str] = None,
+        *,
+        file_path: Optional[Path] = None,
+        thread_seed_text: Optional[str] = None,
+    ) -> None:
+        """Post into the per-trial thread, creating it on first call.
+
+        Discord's `Message.create_thread()` is the only way to attach a
+        thread to a *specific* message — a useful UX detail because it
+        means clicking the failure post opens the discussion. If we
+        don't have a stored anchor message yet (cold start, daemon
+        restart), we post `thread_seed_text` to the channel and use
+        that as the anchor."""
+        if self._channel is None:
+            log.warning(
+                "post_to_trial_thread(%s) called before channel is "
+                "ready; dropping.", trial_index,
+            )
+            return
+        try:
+            import discord
+        except ImportError:  # pragma: no cover
+            return
+
+        thread = self._threads_by_trial.get(trial_index)
+        if thread is None:
+            seed = (
+                thread_seed_text
+                or f"Trial #{trial_index} — discussion thread"
+            )
+            try:
+                anchor = await self._channel.send(seed)
+                thread = await anchor.create_thread(
+                    name=f"trial-{trial_index}",
+                    auto_archive_duration=1440,  # 24h
+                )
+                self._threads_by_trial[trial_index] = thread
+            except Exception as e:
+                # Thread creation can fail if the bot lacks Manage
+                # Threads. Fall back to plain channel post so the
+                # message isn't lost.
+                log.info(
+                    "Couldn't create thread for trial %s (%s); falling "
+                    "back to channel.", trial_index, type(e).__name__,
+                )
+                if file_path is not None:
+                    await self.post_file(file_path, body=body)
+                elif body is not None:
+                    await self.post(body)
+                return
+
+        try:
+            if file_path is not None:
+                f = discord.File(str(file_path))
+                await thread.send(content=body, file=f)
+            elif body is not None:
+                await thread.send(body)
+        except Exception as e:
+            log.warning(
+                "Failed to post into trial-%s thread: %s",
+                trial_index, e,
+            )
+
     # --- live dashboard --------------------------------------------------
 
     async def _unpin_stale_dashboards(self) -> None:
@@ -367,7 +460,15 @@ class DiscordChannel(MessageChannel):
             try:
                 if msg.author.id != self._client.user.id:
                     continue
-                if not (msg.content or "").startswith("📊"):
+                # Match either the old plain-text format (content starts
+                # with 📊) or the new embed format (embed title starts
+                # with 📊 and content is empty/loading).
+                is_embed_dash = bool(
+                    msg.embeds
+                    and (msg.embeds[0].title or "").startswith("📊")
+                )
+                is_text_dash = (msg.content or "").startswith("📊")
+                if not (is_embed_dash or is_text_dash):
                     continue
                 await msg.unpin(reason="HyperHerd: replacing stale dashboard")
                 log.info("Unpinned stale dashboard message %s", msg.id)
@@ -437,7 +538,7 @@ class DiscordChannel(MessageChannel):
             else:
                 self._last_manual_refresh = now
         try:
-            content = self._build_dashboard_content()
+            embed = self._build_dashboard_embed()
         except Exception as e:
             await interaction.followup.send(
                 f"⚠️ Refresh failed: {type(e).__name__}: {e}",
@@ -445,7 +546,7 @@ class DiscordChannel(MessageChannel):
             )
             return
         await interaction.edit_original_response(
-            content=content, view=view,
+            content="", embed=embed, view=view,
         )
         if not cooled:
             wait = max(1, int(_MANUAL_REFRESH_COOLDOWN_S - elapsed))
@@ -460,6 +561,8 @@ class DiscordChannel(MessageChannel):
         channel so users don't have to keep typing `/status`. Best-effort
         on every front: a single failure to edit / pin / build never
         kills the loop, since the rest of the daemon is more important."""
+        import discord as _discord
+
         # Initial post + best-effort pin.
         view = self._build_dashboard_view()
         try:
@@ -487,12 +590,12 @@ class DiscordChannel(MessageChannel):
             except asyncio.CancelledError:
                 return
             try:
-                content = self._build_dashboard_content()
+                embed = self._build_dashboard_embed()
             except Exception as e:
                 log.warning("Dashboard content build failed: %s", e)
                 continue
             try:
-                await self._dashboard_msg.edit(content=content, view=view)
+                await self._dashboard_msg.edit(content="", embed=embed, view=view)
             except Exception as e:
                 # Could be NotFound (user deleted the message) or any
                 # other transient glitch. Try to recreate; if THAT
@@ -502,7 +605,7 @@ class DiscordChannel(MessageChannel):
                 try:
                     view = self._build_dashboard_view()
                     self._dashboard_msg = await self._channel.send(
-                        content, view=view,
+                        embed=embed, view=view,
                     )
                     try:
                         await self._dashboard_msg.pin(
@@ -513,23 +616,31 @@ class DiscordChannel(MessageChannel):
                 except Exception as e2:
                     log.warning("Dashboard repost also failed: %s", e2)
 
-    def _build_dashboard_content(self) -> str:
-        """Vertical-layout dashboard, optimized for Discord's pinned-
-        message side panel (skinny, can't render wide tables). Each
-        trial is one line with an emoji + index + experiment name.
-
-        Reads `.hyperherd/last-snapshot.json` directly rather than
-        going through `cmd_status` (which formats a wide table)."""
+    def _build_dashboard_embed(self):
+        """Build a `discord.Embed` dashboard, optimized for Discord's
+        pinned-message panel. Uses a colored sidebar to signal sweep
+        health at a glance, structured fields for status/daemon/trials."""
         import json as _json
         from datetime import datetime, timezone
+        import discord as _discord
 
         snap_path = self._workspace / ".hyperherd" / "last-snapshot.json"
         if not snap_path.is_file():
-            return f"📊 **{self._sweep_name}** · _no snapshot yet_"
+            embed = _discord.Embed(
+                title=f"📊 {self._sweep_name}",
+                description="_No snapshot yet — waiting for first poll._",
+                color=0x95a5a6,
+            )
+            return embed
         try:
             snap = _json.loads(snap_path.read_text())
         except (OSError, _json.JSONDecodeError):
-            return f"📊 **{self._sweep_name}** · _snapshot unreadable_"
+            embed = _discord.Embed(
+                title=f"📊 {self._sweep_name}",
+                description="_Snapshot unreadable — check disk._",
+                color=0xe74c3c,
+            )
+            return embed
 
         totals = snap.get("totals") or {}
         trials = snap.get("trials") or []
@@ -537,8 +648,61 @@ class DiscordChannel(MessageChannel):
         ticks = info_kwargs.get("ticks", 0)
         cost = info_kwargs.get("total_cost_usd", 0.0)
         started_iso = info_kwargs.get("started_at_iso", "")
+        health = info_kwargs.get("health", "running")
+        consec = info_kwargs.get("consecutive_failures", 0)
+        is_passive = (health == "passive")
 
-        # Phase from the agent's plan, if any.
+        # Sidebar color reflects sweep health.
+        health_color = {
+            "running": 0x2ecc71,   # green
+            "degraded": 0xf1c40f,  # yellow
+            "halted": 0xe74c3c,    # red
+            "stopping": 0x34495e,  # dark
+            "passive": 0x95a5a6,   # grey
+        }.get(health, 0x2ecc71)
+
+        # If any trials are failed, pull color toward warning.
+        if totals.get("failed", 0) and health not in ("halted", "degraded"):
+            health_color = 0xf39c12  # amber
+
+        now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        embed = _discord.Embed(
+            title=f"📊 {self._sweep_name}",
+            color=health_color,
+        )
+        embed.set_footer(text=f"updated {now}")
+
+        # --- Status field ---
+        emoji = {
+            "ready": "⚪", "submitted": "🔵", "queued": "🟡",
+            "running": "🟢", "completed": "✅", "failed": "🔴",
+            "pruned": "🟣", "cancelled": "⚫",
+        }
+        order = ["running", "queued", "submitted", "failed",
+                 "completed", "pruned", "cancelled", "ready"]
+        total = totals.get("total", len(trials))
+        status_lines = []
+        for k in order:
+            v = totals.get(k, 0)
+            if v:
+                status_lines.append(f"{emoji.get(k, '·')} {v} {k}")
+        embed.add_field(
+            name=f"Status ({total} trials)",
+            value="\n".join(status_lines) if status_lines else "_none_",
+            inline=True,
+        )
+
+        # --- Daemon field ---
+        health_emoji = {
+            "running": "🟢", "degraded": "🟡",
+            "halted": "🔴", "stopping": "⚫",
+            "passive": "⚪",
+        }
+        health_label = health
+        if health == "degraded" and consec:
+            health_label = f"degraded ({consec} fail)"
+
+        # Phase from agent plan.
         plan_path = self._workspace / ".hyperherd" / "MONITOR_PLAN.md"
         phase = "?"
         if plan_path.is_file():
@@ -551,60 +715,29 @@ class DiscordChannel(MessageChannel):
             except OSError:
                 pass
 
-        now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-        order = ["ready", "submitted", "queued", "running",
-                 "completed", "failed", "pruned", "cancelled"]
-        # Colored-circle scheme for at-a-glance scanning in Discord's
-        # pinned panel — single-codepoint emojis (no variation selectors)
-        # render consistently across web/desktop/mobile clients.
-        emoji = {
-            "ready": "⚪", "submitted": "🔵", "queued": "🟡",
-            "running": "🟢", "completed": "✅", "failed": "🔴",
-            "pruned": "🟣", "cancelled": "⚫",
-        }
-        health_emoji = {
-            "running": "🟢", "degraded": "🟡",
-            "halted": "🔴", "stopping": "⚫",
-            "passive": "⚪",
-        }
-        total = totals.get("total", len(trials))
-
-        lines = []
-        lines.append(f"📊 **{self._sweep_name}** · {now}")
-        lines.append("")
-        lines.append(f"**Status** ({total} trials)")
-        for k in order:
-            v = totals.get(k, 0)
-            if v:
-                lines.append(f"{emoji.get(k, '·')} {v} {k}")
-
-        lines.append("")
-        lines.append("**Daemon**")
-        health = info_kwargs.get("health", "running")
-        consec = info_kwargs.get("consecutive_failures", 0)
-        health_label = health
-        if health == "degraded" and consec:
-            health_label = f"degraded ({consec} fail)"
-        lines.append(f"{health_emoji.get(health, '·')} `{health_label}`")
-        lines.append(f"phase · `{phase}`")
-        # In passive mode the agent never runs, so ticks/cost are always 0.
-        # Hide them to avoid implying the daemon is doing more than it is.
-        is_passive = (health == "passive")
+        daemon_lines = [
+            f"{health_emoji.get(health, '·')} `{health_label}`",
+            f"phase · `{phase}`",
+        ]
         if not is_passive:
-            lines.append(f"ticks · {ticks}")
-            lines.append(f"cost · ${cost:.4f}")
+            daemon_lines.append(f"ticks · {ticks}")
+            daemon_lines.append(f"cost · ${cost:.4f}")
         next_tick_iso = info_kwargs.get("next_tick_at_iso")
         if next_tick_iso:
             try:
                 nt = datetime.fromisoformat(next_tick_iso)
                 if nt.tzinfo is None:
                     nt = nt.replace(tzinfo=timezone.utc)
-                remaining = int((nt - datetime.now(timezone.utc)).total_seconds())
+                remaining = int(
+                    (nt - datetime.now(timezone.utc)).total_seconds()
+                )
                 label = "next snapshot" if is_passive else "next tick"
                 if remaining > 0:
-                    lines.append(f"{label} · in {_format_uptime(remaining)}")
+                    daemon_lines.append(
+                        f"{label} · in {_format_uptime(remaining)}"
+                    )
                 else:
-                    lines.append(f"{label} · _waking_")
+                    daemon_lines.append(f"{label} · _waking_")
             except Exception:
                 pass
         if started_iso:
@@ -615,44 +748,44 @@ class DiscordChannel(MessageChannel):
                 up_secs = int(
                     (datetime.now(timezone.utc) - started_dt).total_seconds()
                 )
-                lines.append(f"uptime · {_format_uptime(up_secs)}")
+                daemon_lines.append(f"uptime · {_format_uptime(up_secs)}")
             except Exception:
                 pass
+        embed.add_field(
+            name="Daemon",
+            value="\n".join(daemon_lines),
+            inline=True,
+        )
 
+        # --- Trials field ---
         if trials:
-            lines.append("")
-            lines.append("**Trials**")
-            # Active-first so the dashboard's CAP loses boring trials
-            # (completed/ready) when there are many, not the running
-            # ones the user is actually watching.
             sorted_trials = sorted(trials, key=cmd_mod.trial_sort_key)
-            CAP = 25  # keep room for the rest of the message body
+            CAP = 20  # embed field value ≤ 1024 chars; each line ~30 chars
+            trial_lines = []
             for t in sorted_trials[:CAP]:
                 idx = t.get("index", "?")
                 status = t.get("status", "?")
                 ic = emoji.get(status, "·")
-                name = (t.get("experiment_name") or "?")[:24]
+                name = (t.get("experiment_name") or "?")[:20]
                 tail = ""
                 if status == "running":
                     el = t.get("elapsed") or ""
                     tail = f" · {el}" if el else ""
-                elif status == "completed":
-                    last = (t.get("last_log_line") or "").strip()[:24]
+                elif status in ("completed", "failed"):
+                    last = (t.get("last_log_line") or "").strip()[:20]
                     tail = f" · {last}" if last else ""
-                elif status == "failed":
-                    last = (t.get("last_log_line") or "").strip()[:24]
-                    tail = f" · {last}" if last else ""
-                lines.append(f"{ic} #{idx} `{name}`{tail}")
+                trial_lines.append(f"{ic} #{idx} `{name}`{tail}")
             if len(sorted_trials) > CAP:
-                lines.append(
-                    f"_… and {len(sorted_trials) - CAP} more "
-                    f"(use `/running` or `/status`)_"
+                trial_lines.append(
+                    f"_… +{len(sorted_trials) - CAP} more_"
                 )
+            embed.add_field(
+                name="Trials",
+                value="\n".join(trial_lines),
+                inline=False,
+            )
 
-        body = "\n".join(lines)
-        if len(body) > 1990:
-            body = body[:1980] + "\n_(truncated)_"
-        return body
+        return embed
 
     # --- inbound: only mentions/replies reach the agent ------------------
 
@@ -982,6 +1115,37 @@ class DiscordChannel(MessageChannel):
             await interaction.followup.send(_codeblock(text))
 
         @self._tree.command(
+            name="plot",
+            description="Plot a metric across one or more trials as a PNG",
+            guild=guild,
+        )
+        @app_commands.describe(
+            metric="Metric name (e.g. train/loss). /metrics shows what's logged.",
+            trials="Comma- or range-separated indices, e.g. '0,2,5' or '0-3' (default: all)",
+            smooth="Rolling-mean window (default 0 = no smoothing)",
+        )
+        async def plot_cmd(
+            interaction: discord.Interaction,
+            metric: str,
+            trials: str = "",
+            smooth: int = 0,
+        ) -> None:
+            if not await in_bound_channel(interaction):
+                return
+            await interaction.response.defer(thinking=True)
+            try:
+                idxs = _parse_index_spec(trials) if trials.strip() else None
+            except ValueError as e:
+                await interaction.followup.send(
+                    f"Bad trials spec {trials!r}: {e}", ephemeral=True,
+                )
+                return
+            await self._render_and_post_plot(
+                interaction, metric=metric, trial_indices=idxs,
+                smooth=smooth,
+            )
+
+        @self._tree.command(
             name="tail",
             description="Last N lines of a trial's stderr log",
             guild=guild,
@@ -1183,6 +1347,73 @@ class DiscordChannel(MessageChannel):
         if new_topic == current:
             return
         await self._channel.edit(topic=new_topic, reason="HyperHerd heartbeat")
+
+
+    async def _render_and_post_plot(
+        self,
+        interaction,
+        *,
+        metric: str,
+        trial_indices: Optional[list] = None,
+        smooth: int = 0,
+    ) -> None:
+        """Render a metric plot in the executor (matplotlib is sync) and
+        post it as a follow-up file. Errors -> ephemeral so they don't
+        clutter the channel."""
+        from hyperherd.monitor_agent import plots
+
+        def _render():
+            return plots.render_metric_plot(
+                self._workspace, metric,
+                trial_indices=trial_indices, smooth=smooth,
+            )
+
+        try:
+            png_path = await asyncio.get_running_loop().run_in_executor(
+                None, _render,
+            )
+        except plots.PlotUnavailable as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
+        except Exception as e:
+            await interaction.followup.send(
+                f"⚠️ Plot failed: {type(e).__name__}: {e}", ephemeral=True,
+            )
+            return
+
+        try:
+            import discord
+            f = discord.File(str(png_path))
+            caption = f"`{metric}`"
+            if trial_indices:
+                caption += f" — trials {sorted(trial_indices)}"
+            if smooth > 1:
+                caption += f" (smoothed, window={smooth})"
+            await interaction.followup.send(content=caption, file=f)
+        except Exception as e:
+            await interaction.followup.send(
+                f"⚠️ Plot upload failed: {e}", ephemeral=True,
+            )
+        finally:
+            try:
+                Path(png_path).unlink()
+            except OSError:
+                pass
+
+
+def _parse_index_spec(spec: str) -> list:
+    """Parse '0,2,5' or '0-3' or '0-2,5,7-9' into a sorted unique list."""
+    out: set = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out.update(range(int(a), int(b) + 1))
+        else:
+            out.add(int(part))
+    return sorted(out)
 
 
 def _codeblock(text: str) -> str:

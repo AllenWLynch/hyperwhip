@@ -270,9 +270,9 @@ class TestRefreshButtonCooldown(unittest.TestCase):
         return inter
 
     def test_first_click_triggers_snapshot_refresh(self):
-        from unittest.mock import patch
+        from unittest.mock import patch, MagicMock
         ch = self._build()
-        ch._build_dashboard_content = lambda: "📊 ok"
+        ch._build_dashboard_embed = lambda: MagicMock()
         inter = self._fake_interaction()
         with patch(
             "hyperherd.monitor_agent.state.refresh_snapshot",
@@ -284,9 +284,9 @@ class TestRefreshButtonCooldown(unittest.TestCase):
         inter.followup.send.assert_not_called()
 
     def test_second_click_within_cooldown_skips_sacct(self):
-        from unittest.mock import patch
+        from unittest.mock import patch, MagicMock
         ch = self._build()
-        ch._build_dashboard_content = lambda: "📊 ok"
+        ch._build_dashboard_embed = lambda: MagicMock()
         inter1 = self._fake_interaction()
         inter2 = self._fake_interaction()
         with patch(
@@ -302,9 +302,9 @@ class TestRefreshButtonCooldown(unittest.TestCase):
         inter2.followup.send.assert_awaited_once()
 
     def test_failed_refresh_falls_back_to_cached_snapshot(self):
-        from unittest.mock import patch
+        from unittest.mock import patch, MagicMock
         ch = self._build()
-        ch._build_dashboard_content = lambda: "📊 cached"
+        ch._build_dashboard_embed = lambda: MagicMock()
         inter = self._fake_interaction()
         with patch(
             "hyperherd.monitor_agent.state.refresh_snapshot",
@@ -457,6 +457,198 @@ class TestDaemonInboxWake(unittest.TestCase):
         # Channel lifecycle: started before the loop, stopped after.
         self.assertTrue(channel._started)
         self.assertTrue(channel._stopped)
+
+
+class TestDashboardEmbed(unittest.TestCase):
+    """_build_dashboard_embed returns a discord.Embed-like object with
+    correct fields. We stub discord so the test doesn't need discord.py."""
+
+    def _build(self):
+        from hyperherd.monitor_agent.channel.discord_channel import DiscordChannel
+        return DiscordChannel(
+            token="x", guild_id=1, sweep_name="my-sweep",
+            workspace=Path("/tmp"),
+            dashboard_refresh_seconds=60,
+        )
+
+    def _fake_snap(self, path, totals, trials):
+        import json
+        snap = {"totals": totals, "trials": trials}
+        path.write_text(json.dumps(snap))
+
+    def _fake_discord(self):
+        """Return a module stub that records Embed construction."""
+        from unittest.mock import MagicMock
+        discord_stub = MagicMock()
+        # Embed needs to be a real class so we can inspect add_field calls.
+        class FakeEmbed:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.fields = []
+            def add_field(self, *, name, value, inline):
+                self.fields.append({"name": name, "value": value})
+            def set_footer(self, **kwargs):
+                pass
+        discord_stub.Embed = FakeEmbed
+        return discord_stub
+
+    def test_no_snapshot_returns_loading_embed(self):
+        import sys
+        from unittest.mock import patch, MagicMock
+        ch = self._build()
+        # No snapshot file in /tmp/.hyperherd — expect graceful fallback.
+        discord_stub = self._fake_discord()
+        with patch.dict(sys.modules, {"discord": discord_stub}):
+            embed = ch._build_dashboard_embed()
+        self.assertIn("no snapshot", embed.kwargs.get("description", "").lower())
+
+    def test_embed_has_status_daemon_trials_fields(self):
+        import sys, tempfile, json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            snap_dir = ws / ".hyperherd"
+            snap_dir.mkdir()
+            snap = {
+                "totals": {"total": 3, "running": 1, "completed": 2},
+                "trials": [
+                    {"index": 0, "status": "completed",
+                     "experiment_name": "exp-a", "last_log_line": ""},
+                    {"index": 1, "status": "running",
+                     "experiment_name": "exp-b", "elapsed": "2m"},
+                    {"index": 2, "status": "completed",
+                     "experiment_name": "exp-c", "last_log_line": ""},
+                ],
+            }
+            (snap_dir / "last-snapshot.json").write_text(json.dumps(snap))
+            from hyperherd.monitor_agent.channel.discord_channel import (
+                DiscordChannel,
+            )
+            ch = DiscordChannel(
+                token="x", guild_id=1, sweep_name="my-sweep",
+                workspace=ws, dashboard_refresh_seconds=60,
+            )
+            discord_stub = self._fake_discord()
+            with patch.dict(sys.modules, {"discord": discord_stub}):
+                embed = ch._build_dashboard_embed()
+        field_names = [f["name"] for f in embed.fields]
+        # Should have Status, Daemon, and Trials fields.
+        self.assertTrue(any("Status" in n for n in field_names), field_names)
+        self.assertTrue(any("Daemon" in n for n in field_names), field_names)
+        self.assertTrue(any("Trials" in n for n in field_names), field_names)
+
+    def test_embed_color_red_when_halted(self):
+        import sys, tempfile, json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            snap_dir = ws / ".hyperherd"
+            snap_dir.mkdir()
+            (snap_dir / "last-snapshot.json").write_text(
+                json.dumps({"totals": {}, "trials": []})
+            )
+            from hyperherd.monitor_agent.channel.discord_channel import (
+                DiscordChannel,
+            )
+            ch = DiscordChannel(
+                token="x", guild_id=1, sweep_name="s",
+                workspace=ws, dashboard_refresh_seconds=60,
+            )
+            ch._on_info = lambda: {"health": "halted"}
+            discord_stub = self._fake_discord()
+            with patch.dict(sys.modules, {"discord": discord_stub}):
+                embed = ch._build_dashboard_embed()
+        self.assertEqual(embed.kwargs.get("color"), 0xe74c3c)
+
+
+class TestAutoPlot(unittest.IsolatedAsyncioTestCase):
+    """SlurmPoll._auto_plot: best-effort plot-and-post on completion/failure."""
+
+    async def _make_poller(self, channel=None):
+        from hyperherd.monitor_agent.event_source.slurm import SlurmPoll
+        return SlurmPoll(
+            workspace="/tmp/ws",
+            interval_seconds=0.01,
+            channel=channel,
+        )
+
+    async def test_no_channel_returns_immediately(self):
+        """No channel → _auto_plot should not call pick_auto_plot_metric."""
+        from unittest.mock import patch
+        poller = await self._make_poller(channel=None)
+        with patch(
+            "hyperherd.monitor_agent.plots.pick_auto_plot_metric"
+        ) as pick:
+            await poller._auto_plot(0, seed_text="⚠️ trial 0 failed")
+        pick.assert_not_called()
+
+    async def test_no_metric_streams_skips_plot(self):
+        """If pick_auto_plot_metric returns None, no render is attempted."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        channel = MagicMock()
+        channel.post_to_trial_thread = AsyncMock()
+        poller = await self._make_poller(channel=channel)
+        with patch(
+            "hyperherd.monitor_agent.plots.pick_auto_plot_metric",
+            return_value=None,
+        ):
+            await poller._auto_plot(0, seed_text="⚠️ trial 0 failed")
+        channel.post_to_trial_thread.assert_not_called()
+
+    async def test_successful_auto_plot_posts_to_thread(self):
+        """Happy path: pick metric → render → post_to_trial_thread, cleanup."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        channel = MagicMock()
+        channel.post_to_trial_thread = AsyncMock()
+        poller = await self._make_poller(channel=channel)
+
+        # Create a real temp file so the unlink() call works.
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        png_path = Path(tmp.name)
+
+        with (
+            patch(
+                "hyperherd.monitor_agent.plots.pick_auto_plot_metric",
+                return_value="train/loss",
+            ),
+            patch(
+                "hyperherd.monitor_agent.plots.render_metric_plot",
+                return_value=png_path,
+            ),
+        ):
+            await poller._auto_plot(3, seed_text="✅ trial 3 done")
+
+        channel.post_to_trial_thread.assert_awaited_once()
+        call_kwargs = channel.post_to_trial_thread.call_args
+        self.assertEqual(call_kwargs.args[0], 3)
+        self.assertEqual(call_kwargs.kwargs.get("thread_seed_text"), "✅ trial 3 done")
+        # Temp file should be cleaned up after posting.
+        self.assertFalse(png_path.exists())
+
+    async def test_plot_unavailable_doesnt_crash(self):
+        """PlotUnavailable (matplotlib not installed / no points) is swallowed."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from hyperherd.monitor_agent.plots import PlotUnavailable
+
+        channel = MagicMock()
+        channel.post_to_trial_thread = AsyncMock()
+        poller = await self._make_poller(channel=channel)
+        with (
+            patch(
+                "hyperherd.monitor_agent.plots.pick_auto_plot_metric",
+                return_value="val/loss",
+            ),
+            patch(
+                "hyperherd.monitor_agent.plots.render_metric_plot",
+                side_effect=PlotUnavailable("no data"),
+            ),
+        ):
+            await poller._auto_plot(1, seed_text="seed")  # must not raise
+        channel.post_to_trial_thread.assert_not_called()
 
 
 if __name__ == "__main__":

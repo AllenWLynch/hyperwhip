@@ -579,6 +579,120 @@ async def tick_summary(args: Dict[str, Any]) -> Dict[str, Any]:
         )
 
 
+@tool(
+    "post_plot",
+    "Render a metric across one or more trials as a PNG and upload it "
+    "to the chat channel. Use this when a plot would communicate "
+    "diagnostic info more clearly than text — divergence, ranking, "
+    "training dynamics. `metric` is the same name the trial logs (e.g. "
+    "`train/loss`, `val/acc`). `trial_indices` defaults to all "
+    "non-ready trials. `smooth` is a rolling-mean window (0 = off). "
+    "If `caption` is set, it's posted alongside the file as a chat "
+    "message — keep it short.",
+    {
+        "metric": str,
+        "trial_indices": Optional[List[int]],
+        "caption": Optional[str],
+        "smooth": Optional[int],
+    },
+)
+async def post_plot(args: Dict[str, Any]) -> Dict[str, Any]:
+    metric = str(args["metric"])
+    trial_indices = args.get("trial_indices")
+    caption = args.get("caption")
+    smooth = int(args.get("smooth") or 0)
+    channel = _CTX.get("channel")
+    if channel is None:
+        _audit("post_plot_skipped_no_channel", metric=metric)
+        return _text_response(
+            {"posted": False, "reason": "no chat channel configured"},
+            is_error=True,
+        )
+    from hyperherd.monitor_agent import plots
+
+    workspace = _CTX["workspace"]
+
+    def _render():
+        return plots.render_metric_plot(
+            workspace, metric,
+            trial_indices=trial_indices, smooth=smooth,
+        )
+
+    try:
+        png_path = await asyncio.get_running_loop().run_in_executor(
+            None, _render,
+        )
+    except plots.PlotUnavailable as e:
+        _audit("post_plot_failed_render", metric=metric, error=str(e))
+        return _text_response(
+            {"posted": False, "error": str(e)}, is_error=True,
+        )
+    except Exception as e:
+        _audit("post_plot_failed_render", metric=metric, error=str(e))
+        return _text_response(
+            {"posted": False, "error": f"{type(e).__name__}: {e}"},
+            is_error=True,
+        )
+
+    body = _agent_prefix(caption) if caption else None
+    try:
+        await channel.post_file(png_path, body=body)
+        _audit("post_plot", metric=metric,
+               trial_indices=list(trial_indices) if trial_indices else None,
+               caption=(caption or "")[:200])
+        return _text_response({"posted": True, "metric": metric})
+    except Exception as e:
+        _audit("post_plot_failed_upload", metric=metric, error=str(e))
+        return _text_response(
+            {"posted": False, "error": str(e)}, is_error=True,
+        )
+    finally:
+        try:
+            png_path.unlink()
+        except OSError:
+            pass
+
+
+@tool(
+    "msg_thread",
+    "Post a message into a per-trial discussion thread (creating the "
+    "thread if it doesn't exist yet). Use this for trial-specific "
+    "follow-ups: failure diagnosis, remediation plan, comparison with "
+    "siblings. Keeps the main channel scannable when many trials are "
+    "in flight.",
+    {"trial_index": int, "text": str},
+)
+async def msg_thread(args: Dict[str, Any]) -> Dict[str, Any]:
+    idx = int(args["trial_index"])
+    text = str(args["text"])
+    body = _agent_prefix(text)
+    channel = _CTX.get("channel")
+    if channel is None:
+        _audit("msg_thread_skipped_no_channel", trial_index=idx)
+        return _text_response(
+            {"posted": False, "reason": "no chat channel configured"},
+            is_error=True,
+        )
+    try:
+        await channel.post_to_trial_thread(
+            idx, body,
+            thread_seed_text=f"Trial #{idx} — discussion",
+        )
+        _audit("msg_thread", trial_index=idx, text=text[:200],
+               via=channel.name)
+        record_chat_entry(
+            Path(_CTX["workspace"]),
+            role="agent", text=f"[trial-{idx} thread] {text}",
+            via=channel.name, author="agent",
+        )
+        return _text_response({"posted": True, "trial_index": idx})
+    except Exception as e:
+        _audit("msg_thread_failed", trial_index=idx, error=str(e))
+        return _text_response(
+            {"posted": False, "error": str(e)}, is_error=True,
+        )
+
+
 _AGENT_EMOJI = "🐕"
 
 

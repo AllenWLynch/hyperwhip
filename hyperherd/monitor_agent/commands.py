@@ -570,6 +570,7 @@ def cmd_help() -> str:
         "`/stats` — timing and memory stats per trial\n"
         "`/params` — sweep config: parameters, grid shape, all trial combos\n"
         "`/metrics [smooth]` — cross-trial metric summary; optional smoothing window (mean of last N points)\n"
+        "`/plot <metric> [trials] [smooth]` — PNG plot of a metric across trials (e.g. `/plot train/loss 0-3`)\n"
         "`/info` — daemon metadata: workspace, phase, uptime, ticks, cost\n"
         "`/plan` — show the agent's `MONITOR_PLAN.md`\n"
         "`/run <index>` — submit (or resubmit) one trial\n"

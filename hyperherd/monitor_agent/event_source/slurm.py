@@ -111,6 +111,10 @@ class SlurmPoll:
                 log.info("SlurmPoll: new failed indices %s", sorted(new_failed))
                 for idx in sorted(new_failed):
                     await self._post(f"⚠️ Trial {idx} failed.")
+                    await self._auto_plot(
+                        idx,
+                        seed_text=f"⚠️ Trial #{idx} failed — diagnostic plot",
+                    )
                 await queue.put(WakeEvent(trigger="failure"))
 
             if new_completed:
@@ -118,11 +122,55 @@ class SlurmPoll:
                          sorted(new_completed))
                 for idx in sorted(new_completed):
                     await self._post(f"✅ Trial {idx} completed.")
+                    await self._auto_plot(
+                        idx,
+                        seed_text=f"✅ Trial #{idx} completed — final curve",
+                    )
                 await queue.put(WakeEvent(trigger="completion"))
 
             self._seen_running = running
             self._seen_failed = failed
             self._seen_completed = completed
+
+    async def _auto_plot(self, trial_index: int, *, seed_text: str) -> None:
+        """Best-effort: pick a metric, render a PNG, post it to the trial's
+        thread. Never raises — a plotting failure shouldn't kill the poller."""
+        if self._channel is None:
+            return
+        if not hasattr(self._channel, "post_to_trial_thread"):
+            return
+        try:
+            from hyperherd.monitor_agent.plots import (
+                pick_auto_plot_metric, render_metric_plot, PlotUnavailable,
+            )
+            loop = asyncio.get_running_loop()
+            metric = await loop.run_in_executor(
+                None, pick_auto_plot_metric, self._workspace, trial_index,
+            )
+            if metric is None:
+                log.debug("_auto_plot: trial %d has no metric streams", trial_index)
+                return
+            png_path = await loop.run_in_executor(
+                None,
+                lambda: render_metric_plot(
+                    self._workspace, metric, trial_indices=[trial_index],
+                ),
+            )
+            try:
+                await self._channel.post_to_trial_thread(
+                    trial_index,
+                    file_path=png_path,
+                    thread_seed_text=seed_text,
+                )
+            finally:
+                try:
+                    png_path.unlink()
+                except OSError:
+                    pass
+        except PlotUnavailable as e:
+            log.debug("_auto_plot: skipped for trial %d: %s", trial_index, e)
+        except Exception as e:
+            log.warning("_auto_plot failed for trial %d: %s", trial_index, e)
 
     async def _post(self, text: str) -> None:
         """Best-effort post to the chat channel. Logged on failure but

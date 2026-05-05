@@ -64,6 +64,29 @@ class MessageChannel(Protocol):
     async def post(self, body: str) -> None:
         """Send a message body to the configured outbound destination."""
 
+    async def post_file(
+        self, path: "Path", *, body: Optional[str] = None,
+    ) -> None:
+        """Upload a file (PNG plot, log excerpt, ...) with optional
+        accompanying message text. Transports without a file primitive
+        should degrade gracefully — log + send `body` alone."""
+
+    async def post_to_trial_thread(
+        self,
+        trial_index: int,
+        body: Optional[str] = None,
+        *,
+        file_path: "Optional[Path]" = None,
+        thread_seed_text: Optional[str] = None,
+    ) -> None:
+        """Post a message (and optionally a file) into a per-trial
+        thread, creating the thread on first call.
+
+        `thread_seed_text` is the parent-message text used when the
+        thread doesn't exist yet — a daemon restart can't recover the
+        original failure post, so we synthesize one. Transports without
+        threads (webhook, IRC) fall back to a plain channel post."""
+
     def set_inbound_handler(self, handler: InboundHandler) -> None:
         """Register a callback fired for each user message."""
 
